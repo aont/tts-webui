@@ -107,6 +107,14 @@
       const audioPlayer = document.getElementById("audioPlayer");
       const downloadLink = document.getElementById("downloadLink");
 
+      const STORAGE_KEYS = {
+        text: "edgeTtsWebUi.text",
+        voice: "edgeTtsWebUi.voice",
+        rate: "edgeTtsWebUi.rate",
+        pitch: "edgeTtsWebUi.pitch",
+        wsUrl: "edgeTtsWebUi.wsUrl",
+      };
+
       let socket;
       let currentObjectUrl;
 
@@ -147,6 +155,42 @@
       function setStatus(message, isError = false) {
         statusEl.textContent = message;
         statusEl.style.color = isError ? "crimson" : "inherit";
+      }
+
+      function saveInputsToStorage() {
+        localStorage.setItem(STORAGE_KEYS.text, textInput.value);
+        localStorage.setItem(STORAGE_KEYS.voice, voiceSelect.value);
+        localStorage.setItem(STORAGE_KEYS.rate, rateInput.value);
+        localStorage.setItem(STORAGE_KEYS.pitch, pitchInput.value);
+        localStorage.setItem(STORAGE_KEYS.wsUrl, wsUrlInput.value);
+      }
+
+      function restoreInputsFromStorage() {
+        const savedText = localStorage.getItem(STORAGE_KEYS.text);
+        const savedVoice = localStorage.getItem(STORAGE_KEYS.voice);
+        const savedRate = localStorage.getItem(STORAGE_KEYS.rate);
+        const savedPitch = localStorage.getItem(STORAGE_KEYS.pitch);
+        const savedWsUrl = localStorage.getItem(STORAGE_KEYS.wsUrl);
+
+        if (savedText !== null) {
+          textInput.value = savedText;
+        }
+
+        if (savedVoice !== null) {
+          voiceSelect.value = savedVoice;
+        }
+
+        if (savedRate !== null) {
+          rateInput.value = savedRate;
+        }
+
+        if (savedPitch !== null) {
+          pitchInput.value = savedPitch;
+        }
+
+        if (savedWsUrl !== null) {
+          wsUrlInput.value = savedWsUrl;
+        }
       }
 
       function getDefaultWsUrl() {
@@ -214,6 +258,7 @@
       }
 
       connectBtn.addEventListener("click", () => {
+        saveInputsToStorage();
         connectWebSocket();
       });
 
@@ -238,9 +283,18 @@
             pitch: pitchInput.value.trim() || "+0Hz",
           })
         );
+
+        saveInputsToStorage();
       });
 
+      textInput.addEventListener("input", saveInputsToStorage);
+      voiceSelect.addEventListener("change", saveInputsToStorage);
+      rateInput.addEventListener("input", saveInputsToStorage);
+      pitchInput.addEventListener("input", saveInputsToStorage);
+      wsUrlInput.addEventListener("input", saveInputsToStorage);
+
       wsUrlInput.value = getDefaultWsUrl();
+      restoreInputsFromStorage();
       connectWebSocket();
     </script>
   </body>
