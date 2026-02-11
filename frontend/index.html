@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VOICEVOX WebUI Proxy</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 2rem; max-width: 960px; }
+      textarea { width: 100%; min-height: 220px; font-size: 1rem; }
+      .controls { display: grid; grid-template-columns: repeat(2, minmax(200px, 1fr)); gap: 1rem; margin: 1rem 0; }
+      button { padding: 0.6rem 1rem; font-size: 1rem; }
+      #status { margin-top: 1rem; white-space: pre-wrap; }
+      audio { width: 100%; margin-top: 1rem; }
+      label { display: block; font-weight: bold; margin-bottom: 0.3rem; }
+      input, select { width: 100%; padding: 0.45rem; }
+    </style>
+  </head>
+  <body>
+    <h1>VOICEVOX Synthesis WebUI</h1>
+    <p>Enter plain text, Markdown, or HTML, then synthesize via the Python aiohttp proxy backend.</p>
+
+    <label for="textInput">Input</label>
+    <textarea id="textInput" placeholder="Type text, markdown, or html..."></textarea>
+
+    <div class="controls">
+      <div>
+        <label for="inputFormat">Input format</label>
+        <select id="inputFormat">
+          <option value="auto">Auto detect</option>
+          <option value="text">Plain text</option>
+          <option value="markdown">Markdown</option>
+          <option value="html">HTML</option>
+        </select>
+      </div>
+      <div>
+        <label for="speakerSelect">Speaker</label>
+        <select id="speakerSelect"></select>
+      </div>
+      <div>
+        <label for="maxChunkChars">Max characters per chunk</label>
+        <input id="maxChunkChars" type="number" min="8" value="120" />
+      </div>
+    </div>
+
+    <button id="synthesizeButton">Synthesize</button>
+    <button id="downloadButton" disabled>Download WAV</button>
+
+    <audio id="audioPlayer" controls></audio>
+    <div id="status"></div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
