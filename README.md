@@ -50,6 +50,12 @@ Returns VOICEVOX speaker/style list.
 
 Simple health response.
 
+
+## Frontend behavior
+
+- You can set a custom backend endpoint URL from the frontend (empty uses same-origin `/api`).
+- Frontend form values are persisted in `localStorage` and restored on reload.
+
 ## Local run
 
 ```bash

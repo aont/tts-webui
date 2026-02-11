@@ -24,6 +24,10 @@
 
     <div class="controls">
       <div>
+        <label for="backendEndpoint">Backend endpoint</label>
+        <input id="backendEndpoint" type="url" placeholder="http://localhost:8080" />
+      </div>
+      <div>
         <label for="inputFormat">Input format</label>
         <select id="inputFormat">
           <option value="auto">Auto detect</option>
@@ -51,6 +55,7 @@
     </div>
 
     <button id="synthesizeButton">Synthesize</button>
+    <button id="reloadSpeakersButton">Reload Speakers</button>
     <button id="downloadButton" disabled>Download WAV</button>
 
     <audio id="audioPlayer" controls></audio>
