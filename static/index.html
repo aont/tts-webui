@@ -21,9 +21,24 @@
         font-size: 1rem;
       }
       select,
+      input,
       button {
         padding: 0.6rem;
         font-size: 1rem;
+      }
+      .controls {
+        display: flex;
+        gap: 0.6rem;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .control-group {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+      }
+      .control-group input {
+        width: 7rem;
       }
       .actions {
         display: flex;
@@ -49,14 +64,24 @@
 
     <textarea id="textInput" placeholder="Type text to synthesize..."></textarea>
 
-    <div class="actions">
-      <label for="voiceSelect">Voice:</label>
-      <select id="voiceSelect">
-        <option value="en-US-JennyNeural">en-US-JennyNeural</option>
-        <option value="en-US-GuyNeural">en-US-GuyNeural</option>
-        <option value="en-GB-SoniaNeural">en-GB-SoniaNeural</option>
-        <option value="ja-JP-NanamiNeural">ja-JP-NanamiNeural</option>
-      </select>
+    <div class="actions controls">
+      <div class="control-group">
+        <label for="voiceSelect">Voice:</label>
+        <select id="voiceSelect">
+          <option value="en-US-JennyNeural">en-US-JennyNeural</option>
+          <option value="en-US-GuyNeural">en-US-GuyNeural</option>
+          <option value="en-GB-SoniaNeural">en-GB-SoniaNeural</option>
+          <option value="ja-JP-NanamiNeural">ja-JP-NanamiNeural</option>
+        </select>
+      </div>
+      <div class="control-group">
+        <label for="rateInput">Rate:</label>
+        <input id="rateInput" type="text" value="+0%" placeholder="e.g. +15%" />
+      </div>
+      <div class="control-group">
+        <label for="pitchInput">Pitch:</label>
+        <input id="pitchInput" type="text" value="+0Hz" placeholder="e.g. +5Hz" />
+      </div>
       <button id="synthesizeBtn" type="button">Synthesize</button>
       <a id="downloadLink" href="#" download="speech.mp3" style="display: none">Download audio</a>
     </div>
@@ -69,6 +94,8 @@
       const statusEl = document.getElementById("status");
       const textInput = document.getElementById("textInput");
       const voiceSelect = document.getElementById("voiceSelect");
+      const rateInput = document.getElementById("rateInput");
+      const pitchInput = document.getElementById("pitchInput");
       const synthesizeBtn = document.getElementById("synthesizeBtn");
       const audioPlayer = document.getElementById("audioPlayer");
       const downloadLink = document.getElementById("downloadLink");
@@ -183,6 +210,8 @@
             action: "synthesize",
             text,
             voice: voiceSelect.value,
+            rate: rateInput.value.trim() || "+0%",
+            pitch: pitchInput.value.trim() || "+0Hz",
           })
         );
       });

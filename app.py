@@ -50,11 +50,21 @@ def split_text_segments(text: str, max_chars: int = MAX_SEGMENT_CHARS) -> list[s
     return segments
 
 
-async def synthesize_speech(text: str, voice: str = "en-US-JennyNeural") -> bytes:
+async def synthesize_speech(
+    text: str,
+    voice: str = "en-US-JennyNeural",
+    rate: str = "+0%",
+    pitch: str = "+0Hz",
+) -> bytes:
     audio_chunks: list[bytes] = []
 
     for text_segment in split_text_segments(text):
-        communicate = edge_tts.Communicate(text=text_segment, voice=voice)
+        communicate = edge_tts.Communicate(
+            text=text_segment,
+            voice=voice,
+            rate=rate,
+            pitch=pitch,
+        )
 
         async for chunk in communicate.stream():
             if chunk.get("type") == "audio":
@@ -88,6 +98,8 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
 
         text = (payload.get("text") or "").strip()
         voice = payload.get("voice") or "en-US-JennyNeural"
+        rate = payload.get("rate") or "+0%"
+        pitch = payload.get("pitch") or "+0Hz"
 
         if not text:
             await ws.send_json({"type": "error", "message": "Text is required"})
@@ -96,7 +108,12 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
         await ws.send_json({"type": "status", "message": "Synthesizing..."})
 
         try:
-            audio_data = await synthesize_speech(text=text, voice=voice)
+            audio_data = await synthesize_speech(
+                text=text,
+                voice=voice,
+                rate=rate,
+                pitch=pitch,
+            )
             audio_b64 = base64.b64encode(audio_data).decode("utf-8")
             await ws.send_json(
                 {
