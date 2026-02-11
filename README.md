@@ -2,7 +2,6 @@
 
 This project provides:
 
-- **VOICEVOX Engine in Docker** (`voicevox/voicevox_engine`)
 - **Python `aiohttp` proxy backend**
 - **Static frontend** (HTML + JavaScript only, no Node.js)
 
@@ -13,16 +12,6 @@ The frontend sends text to the backend. The backend:
 3. Calls VOICEVOX `/audio_query` + `/synthesis` for each chunk.
 4. Concatenates resulting WAV chunks into a single WAV.
 5. Returns the merged audio for playback/download.
-
-## Run with Docker Compose
-
-```bash
-docker compose up --build
-```
-
-Then open:
-
-- `http://localhost:8080`
 
 ## API
 
@@ -57,11 +46,25 @@ Returns VOICEVOX speaker/style list.
 
 Simple health response.
 
-## Local run without Docker Compose
+## Local run
 
 ```bash
 pip install -r requirements.txt
-VOICEVOX_BASE_URL=http://localhost:50021 python backend/app.py
+VOICEVOX_BASE_URL=http://localhost:50021 python backend/app.py --port 8080
 ```
 
 (Requires VOICEVOX Engine running separately.)
+
+### Run backend only (without serving frontend)
+
+If you serve `frontend/` from another server, start the backend with:
+
+```bash
+VOICEVOX_BASE_URL=http://localhost:50021 python backend/app.py --no-frontend --port 8080
+```
+
+Available flags:
+
+- `--host` (default: `HOST` env var or `0.0.0.0`)
+- `--port` (default: `PORT` env var or `8080`)
+- `--no-frontend` (serve API only)

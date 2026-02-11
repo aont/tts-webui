@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import io
 import os
@@ -128,8 +129,6 @@ def concat_wavs(wav_blobs: Iterable[bytes]) -> bytes:
     return merged.getvalue()
 
 
-
-
 async def handle_index(_: web.Request) -> web.Response:
     return web.FileResponse("frontend/index.html")
 
@@ -193,13 +192,41 @@ async def handle_speakers(_: web.Request) -> web.Response:
         )
 
 
-app = web.Application()
-app.router.add_get("/", handle_index)
-app.router.add_get("/api/health", handle_health)
-app.router.add_get("/api/speakers", handle_speakers)
-app.router.add_post("/api/synthesize", handle_synthesize)
-app.router.add_static("/", "frontend", show_index=True)
+def build_app(serve_frontend: bool = True) -> web.Application:
+    app = web.Application()
+    app.router.add_get("/api/health", handle_health)
+    app.router.add_get("/api/speakers", handle_speakers)
+    app.router.add_post("/api/synthesize", handle_synthesize)
+
+    if serve_frontend:
+        app.router.add_get("/", handle_index)
+        app.router.add_static("/", "frontend", show_index=True)
+
+    return app
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="VOICEVOX WebUI backend server")
+    parser.add_argument(
+        "--host",
+        default=os.getenv("HOST", "0.0.0.0"),
+        help="Host to bind (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=int(os.getenv("PORT", "8080")),
+        help="Port to listen on (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--no-frontend",
+        action="store_true",
+        help="Disable serving static frontend files from this backend",
+    )
+    return parser.parse_args()
 
 
 if __name__ == "__main__":
-    web.run_app(app, host="0.0.0.0", port=int(os.getenv("PORT", "8080")))
+    args = parse_args()
+    app = build_app(serve_frontend=not args.no_frontend)
+    web.run_app(app, host=args.host, port=args.port)
