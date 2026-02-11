@@ -13,6 +13,14 @@
       audio { width: 100%; margin-top: 1rem; }
       label { display: block; font-weight: bold; margin-bottom: 0.3rem; }
       input, select { width: 100%; padding: 0.45rem; }
+      .history { margin-top: 2rem; }
+      .history-item { border: 1px solid #ddd; border-radius: 8px; padding: 0.8rem; margin-bottom: 0.8rem; }
+      .history-header { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; }
+      .history-header strong { font-size: 1rem; }
+      .history-header small { color: #666; }
+      .history-text { margin: 0.5rem 0; white-space: pre-wrap; max-height: 7rem; overflow-y: auto; }
+      .history-settings { margin: 0.2rem 0 0.6rem; color: #444; font-size: 0.9rem; }
+      .history-actions { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
     </style>
   </head>
   <body>
@@ -60,6 +68,13 @@
 
     <audio id="audioPlayer" controls></audio>
     <div id="status"></div>
+
+    <section class="history">
+      <h2>History</h2>
+      <p>Past synthesized audio, text, and settings are saved locally in this browser.</p>
+      <button id="clearHistoryButton">Clear History</button>
+      <div id="historyList"></div>
+    </section>
 
     <script src="./app.js"></script>
   </body>

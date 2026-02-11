@@ -8,12 +8,152 @@ const pitchScale = document.getElementById("pitchScale");
 const synthesizeButton = document.getElementById("synthesizeButton");
 const reloadSpeakersButton = document.getElementById("reloadSpeakersButton");
 const downloadButton = document.getElementById("downloadButton");
+const clearHistoryButton = document.getElementById("clearHistoryButton");
 const audioPlayer = document.getElementById("audioPlayer");
+const historyList = document.getElementById("historyList");
 const statusEl = document.getElementById("status");
 
 const STORAGE_KEY = "voicevox-webui-form";
+const HISTORY_STORAGE_KEY = "voicevox-webui-history";
+const MAX_HISTORY_ITEMS = 20;
 
 let latestBlob = null;
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function base64ToBytes(base64) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+async function blobToBase64(blob) {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  return bytesToBase64(bytes);
+}
+
+function base64ToBlob(base64, mimeType = "audio/ogg") {
+  const bytes = base64ToBytes(base64);
+  return new Blob([bytes], { type: mimeType });
+}
+
+function readHistory() {
+  try {
+    const raw = localStorage.getItem(HISTORY_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed;
+  } catch {
+    return [];
+  }
+}
+
+function writeHistory(items) {
+  localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(items));
+}
+
+function applyHistoryItem(item) {
+  textInput.value = item.text || "";
+  inputFormat.value = item.inputFormat || "auto";
+  maxChunkChars.value = String(item.maxChunkChars || 120);
+  speedScale.value = String(item.speedScale ?? 1.0);
+  pitchScale.value = String(item.pitchScale ?? 0.0);
+  if (item.speaker && Array.from(speakerSelect.options).some((opt) => opt.value === String(item.speaker))) {
+    speakerSelect.value = String(item.speaker);
+  }
+
+  if (item.audioBase64) {
+    latestBlob = base64ToBlob(item.audioBase64, item.audioType || "audio/ogg");
+    audioPlayer.src = URL.createObjectURL(latestBlob);
+  }
+
+  saveInputs();
+  setStatus("Loaded selected history item.");
+}
+
+function renderHistory() {
+  const items = readHistory();
+  historyList.innerHTML = "";
+
+  if (!items.length) {
+    historyList.textContent = "No history yet.";
+    return;
+  }
+
+  for (const item of items) {
+    const wrapper = document.createElement("article");
+    wrapper.className = "history-item";
+
+    const header = document.createElement("div");
+    header.className = "history-header";
+
+    const title = document.createElement("strong");
+    title.textContent = item.label || "Synthesized audio";
+
+    const when = document.createElement("small");
+    when.textContent = new Date(item.createdAt || Date.now()).toLocaleString();
+
+    header.append(title, when);
+
+    const text = document.createElement("div");
+    text.className = "history-text";
+    text.textContent = item.text || "";
+
+    const settings = document.createElement("div");
+    settings.className = "history-settings";
+    settings.textContent = `speaker: ${item.speaker}, format: ${item.inputFormat}, maxChunk: ${item.maxChunkChars}, speed: ${item.speedScale}, pitch: ${item.pitchScale}`;
+
+    const historyAudio = document.createElement("audio");
+    historyAudio.controls = true;
+    if (item.audioBase64) {
+      historyAudio.src = URL.createObjectURL(base64ToBlob(item.audioBase64, item.audioType || "audio/ogg"));
+    }
+
+    const actions = document.createElement("div");
+    actions.className = "history-actions";
+
+    const useButton = document.createElement("button");
+    useButton.textContent = "Load this";
+    useButton.addEventListener("click", () => applyHistoryItem(item));
+
+    actions.appendChild(useButton);
+    wrapper.append(header, text, settings, historyAudio, actions);
+    historyList.appendChild(wrapper);
+  }
+}
+
+async function addHistoryItem(payload, audioBlob) {
+  const audioBase64 = await blobToBase64(audioBlob);
+  const item = {
+    id: String(Date.now()) + Math.random().toString(16).slice(2),
+    createdAt: new Date().toISOString(),
+    label: (payload.text || "").slice(0, 24) || "Synthesized audio",
+    text: payload.text,
+    inputFormat: payload.input_format,
+    speaker: payload.speaker,
+    maxChunkChars: payload.max_chunk_chars,
+    speedScale: payload.speed_scale,
+    pitchScale: payload.pitch_scale,
+    audioType: audioBlob.type || "audio/ogg",
+    audioBase64,
+  };
+
+  const current = readHistory();
+  current.unshift(item);
+  writeHistory(current.slice(0, MAX_HISTORY_ITEMS));
+  renderHistory();
+}
 
 function normalizeEndpoint(value) {
   const trimmed = value.trim();
@@ -164,6 +304,7 @@ synthesizeButton.addEventListener("click", async () => {
     latestBlob = await res.blob();
     const audioUrl = URL.createObjectURL(latestBlob);
     audioPlayer.src = audioUrl;
+    await addHistoryItem(payload, latestBlob);
 
     const chunkCount = res.headers.get("X-Chunk-Count") || "?";
     const normalizedLen = res.headers.get("X-Normalized-Length") || "?";
@@ -192,5 +333,12 @@ downloadButton.addEventListener("click", () => {
   URL.revokeObjectURL(url);
 });
 
+clearHistoryButton.addEventListener("click", () => {
+  writeHistory([]);
+  renderHistory();
+  setStatus("History cleared.");
+});
+
 loadSavedInputs();
 loadSpeakers();
+renderHistory();
