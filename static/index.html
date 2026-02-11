@@ -64,6 +64,7 @@
     <div id="status"></div>
     <audio id="audioPlayer" controls></audio>
 
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script>
       const statusEl = document.getElementById("status");
       const textInput = document.getElementById("textInput");
@@ -74,6 +75,40 @@
 
       let socket;
       let currentObjectUrl;
+
+      function htmlToText(input) {
+        const doc = new DOMParser().parseFromString(input, "text/html");
+        return (doc.body.textContent || "").replace(/\s+\n/g, "\n").trim();
+      }
+
+      function markdownToText(input) {
+        if (!window.marked || typeof window.marked.parse !== "function") {
+          return input.trim();
+        }
+
+        const html = window.marked.parse(input);
+        return htmlToText(html);
+      }
+
+      function isLikelyHtml(input) {
+        return /<\/?[a-z][\s\S]*>/i.test(input);
+      }
+
+      function isLikelyMarkdown(input) {
+        return /(^|\n)(#{1,6}\s|[-*+]\s|\d+\.\s|>\s|```)|\[[^\]]+\]\([^)]+\)|\*\*[^*]+\*\*|_[^_]+_/m.test(input);
+      }
+
+      function normalizeInputText(input) {
+        if (isLikelyHtml(input)) {
+          return htmlToText(input);
+        }
+
+        if (isLikelyMarkdown(input)) {
+          return markdownToText(input);
+        }
+
+        return input.trim();
+      }
 
       function setStatus(message, isError = false) {
         statusEl.textContent = message;
@@ -132,7 +167,7 @@
       }
 
       synthesizeBtn.addEventListener("click", () => {
-        const text = textInput.value.trim();
+        const text = normalizeInputText(textInput.value);
         if (!text) {
           setStatus("Please enter text first.", true);
           return;
