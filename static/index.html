@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Edge TTS WebSocket Demo</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: Inter, system-ui, sans-serif;
+      }
+      body {
+        margin: 2rem;
+        max-width: 900px;
+      }
+      textarea {
+        width: 100%;
+        min-height: 160px;
+        margin-bottom: 1rem;
+        padding: 0.7rem;
+        font-size: 1rem;
+      }
+      select,
+      button {
+        padding: 0.6rem;
+        font-size: 1rem;
+      }
+      .actions {
+        display: flex;
+        gap: 0.6rem;
+        align-items: center;
+        margin-bottom: 1rem;
+      }
+      #status {
+        min-height: 1.4rem;
+        margin-bottom: 1rem;
+      }
+      audio {
+        width: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Edge TTS WebSocket Demo</h1>
+    <p>
+      Enter text and synthesize speech using <code>edge-tts</code>. Communication between frontend and backend happens via
+      <code>/ws</code>.
+    </p>
+
+    <textarea id="textInput" placeholder="Type text to synthesize..."></textarea>
+
+    <div class="actions">
+      <label for="voiceSelect">Voice:</label>
+      <select id="voiceSelect">
+        <option value="en-US-JennyNeural">en-US-JennyNeural</option>
+        <option value="en-US-GuyNeural">en-US-GuyNeural</option>
+        <option value="en-GB-SoniaNeural">en-GB-SoniaNeural</option>
+        <option value="ja-JP-NanamiNeural">ja-JP-NanamiNeural</option>
+      </select>
+      <button id="synthesizeBtn" type="button">Synthesize</button>
+      <a id="downloadLink" href="#" download="speech.mp3" style="display: none">Download audio</a>
+    </div>
+
+    <div id="status"></div>
+    <audio id="audioPlayer" controls></audio>
+
+    <script>
+      const statusEl = document.getElementById("status");
+      const textInput = document.getElementById("textInput");
+      const voiceSelect = document.getElementById("voiceSelect");
+      const synthesizeBtn = document.getElementById("synthesizeBtn");
+      const audioPlayer = document.getElementById("audioPlayer");
+      const downloadLink = document.getElementById("downloadLink");
+
+      let socket;
+      let currentObjectUrl;
+
+      function setStatus(message, isError = false) {
+        statusEl.textContent = message;
+        statusEl.style.color = isError ? "crimson" : "inherit";
+      }
+
+      function connectWebSocket() {
+        const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+        socket = new WebSocket(`${protocol}://${window.location.host}/ws`);
+
+        socket.addEventListener("open", () => {
+          setStatus("WebSocket connected.");
+        });
+
+        socket.addEventListener("close", () => {
+          setStatus("WebSocket disconnected. Reconnecting in 2 seconds...", true);
+          setTimeout(connectWebSocket, 2000);
+        });
+
+        socket.addEventListener("message", (event) => {
+          const payload = JSON.parse(event.data);
+
+          if (payload.type === "ready" || payload.type === "status") {
+            setStatus(payload.message);
+            return;
+          }
+
+          if (payload.type === "error") {
+            setStatus(payload.message, true);
+            return;
+          }
+
+          if (payload.type === "audio") {
+            const binary = atob(payload.audio_base64);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) {
+              bytes[i] = binary.charCodeAt(i);
+            }
+
+            const blob = new Blob([bytes], { type: payload.format || "audio/mpeg" });
+            if (currentObjectUrl) URL.revokeObjectURL(currentObjectUrl);
+            currentObjectUrl = URL.createObjectURL(blob);
+
+            audioPlayer.src = currentObjectUrl;
+            audioPlayer.play().catch(() => {
+              // autoplay might be blocked by browser policy
+            });
+
+            downloadLink.href = currentObjectUrl;
+            downloadLink.download = payload.filename || "speech.mp3";
+            downloadLink.style.display = "inline-block";
+
+            setStatus("Synthesis complete. Playing audio and download available.");
+          }
+        });
+      }
+
+      synthesizeBtn.addEventListener("click", () => {
+        const text = textInput.value.trim();
+        if (!text) {
+          setStatus("Please enter text first.", true);
+          return;
+        }
+
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+          setStatus("WebSocket is not connected yet.", true);
+          return;
+        }
+
+        socket.send(
+          JSON.stringify({
+            action: "synthesize",
+            text,
+            voice: voiceSelect.value,
+          })
+        );
+      });
+
+      connectWebSocket();
+    </script>
+  </body>
+</html>
