@@ -88,13 +88,19 @@ def split_text(text: str, max_chars: int) -> List[str]:
     return chunks
 
 
-async def voicevox_query(session: ClientSession, text: str, speaker: int) -> dict:
+async def voicevox_query(
+    session: ClientSession, text: str, speaker: int, speed_scale: float, pitch_scale: float
+) -> dict:
     async with session.post(
         f"{VOICEVOX_BASE_URL}/audio_query",
         params={"text": text, "speaker": speaker},
     ) as resp:
         resp.raise_for_status()
-        return await resp.json()
+        query = await resp.json()
+
+    query["speedScale"] = speed_scale
+    query["pitchScale"] = pitch_scale
+    return query
 
 
 async def voicevox_synthesis(session: ClientSession, query: dict, speaker: int) -> bytes:
@@ -174,18 +180,27 @@ async def handle_synthesize(request: web.Request) -> web.Response:
     text = normalize_text(payload.get("text", ""), payload.get("input_format", "auto"))
     speaker = int(payload.get("speaker", 1))
     max_chunk_chars = int(payload.get("max_chunk_chars", MAX_CHUNK_CHARS))
+    speed_scale = float(payload.get("speed_scale", 1.0))
+    pitch_scale = float(payload.get("pitch_scale", 0.0))
 
     if not text:
         return web.json_response({"error": "text is empty after preprocessing"}, status=400)
     if max_chunk_chars < 8:
         return web.json_response({"error": "max_chunk_chars must be >= 8"}, status=400)
+    if not (0.5 <= speed_scale <= 2.0):
+        return web.json_response({"error": "speed_scale must be between 0.5 and 2.0"}, status=400)
+    if not (-0.15 <= pitch_scale <= 0.15):
+        return web.json_response({"error": "pitch_scale must be between -0.15 and 0.15"}, status=400)
 
     chunks = split_text(text, max_chunk_chars)
 
     timeout = ClientTimeout(total=REQUEST_TIMEOUT_SECONDS)
     try:
         async with ClientSession(timeout=timeout) as session:
-            queries = [voicevox_query(session, chunk, speaker) for chunk in chunks]
+            queries = [
+                voicevox_query(session, chunk, speaker, speed_scale, pitch_scale)
+                for chunk in chunks
+            ]
             query_results = await asyncio.gather(*queries)
 
             synthesis_tasks = [

@@ -2,6 +2,8 @@ const textInput = document.getElementById("textInput");
 const inputFormat = document.getElementById("inputFormat");
 const speakerSelect = document.getElementById("speakerSelect");
 const maxChunkChars = document.getElementById("maxChunkChars");
+const speedScale = document.getElementById("speedScale");
+const pitchScale = document.getElementById("pitchScale");
 const synthesizeButton = document.getElementById("synthesizeButton");
 const downloadButton = document.getElementById("downloadButton");
 const audioPlayer = document.getElementById("audioPlayer");
@@ -55,6 +57,8 @@ synthesizeButton.addEventListener("click", async () => {
       input_format: inputFormat.value,
       speaker: Number(speakerSelect.value || 1),
       max_chunk_chars: Number(maxChunkChars.value || 120),
+      speed_scale: Number(speedScale.value || 1.0),
+      pitch_scale: Number(pitchScale.value || 0.0),
     };
 
     const res = await fetch("/api/synthesize", {

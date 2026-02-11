@@ -24,12 +24,16 @@ Request JSON:
   "text": "# Hello\nThis is markdown.",
   "input_format": "auto",
   "speaker": 1,
-  "max_chunk_chars": 120
+  "max_chunk_chars": 120,
+  "speed_scale": 1.0,
+  "pitch_scale": 0.0
 }
 ```
 
 - `input_format`: `auto | text | markdown | html`
 - `max_chunk_chars`: chunk size for long text
+- `speed_scale`: speaking speed (`0.5` - `2.0`)
+- `pitch_scale`: speaking pitch (`-0.15` - `0.15`)
 
 Response:
 
