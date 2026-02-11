@@ -11,6 +11,7 @@ A minimal demo app using:
 - Enter text in the browser
 - Send synthesis requests to backend over `/ws`
 - Backend generates speech with `edge-tts`
+- Long input is automatically split into manageable chunks, synthesized per chunk, and concatenated into a single MP3
 - Frontend can play the returned audio and download it as an MP3
 
 ## Run locally

@@ -8,15 +8,57 @@ import edge_tts
 
 BASE_DIR = Path(__file__).parent
 STATIC_DIR = BASE_DIR / "static"
+MAX_SEGMENT_CHARS = 3000
+
+
+def split_text_segments(text: str, max_chars: int = MAX_SEGMENT_CHARS) -> list[str]:
+    """Split text into chunks that respect maximum length while preferring word boundaries."""
+    stripped_text = text.strip()
+    if not stripped_text:
+        return []
+
+    words = stripped_text.split()
+    segments: list[str] = []
+    current_segment: list[str] = []
+    current_length = 0
+
+    for word in words:
+        if len(word) > max_chars:
+            if current_segment:
+                segments.append(" ".join(current_segment))
+                current_segment = []
+                current_length = 0
+
+            for i in range(0, len(word), max_chars):
+                segments.append(word[i : i + max_chars])
+            continue
+
+        separator_length = 1 if current_segment else 0
+        projected_length = current_length + separator_length + len(word)
+
+        if projected_length <= max_chars:
+            current_segment.append(word)
+            current_length = projected_length
+        else:
+            segments.append(" ".join(current_segment))
+            current_segment = [word]
+            current_length = len(word)
+
+    if current_segment:
+        segments.append(" ".join(current_segment))
+
+    return segments
 
 
 async def synthesize_speech(text: str, voice: str = "en-US-JennyNeural") -> bytes:
-    communicate = edge_tts.Communicate(text=text, voice=voice)
     audio_chunks: list[bytes] = []
 
-    async for chunk in communicate.stream():
-        if chunk.get("type") == "audio":
-            audio_chunks.append(chunk["data"])
+    for text_segment in split_text_segments(text):
+        communicate = edge_tts.Communicate(text=text_segment, voice=voice)
+
+        async for chunk in communicate.stream():
+            if chunk.get("type") == "audio":
+                audio_chunks.append(chunk["data"])
 
     return b"".join(audio_chunks)
 
@@ -49,10 +91,6 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
 
         if not text:
             await ws.send_json({"type": "error", "message": "Text is required"})
-            continue
-
-        if len(text) > 3000:
-            await ws.send_json({"type": "error", "message": "Text too long (max 3000 characters)"})
             continue
 
         await ws.send_json({"type": "status", "message": "Synthesizing..."})
