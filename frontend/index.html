@@ -166,6 +166,7 @@
 
       let socket;
       let currentObjectUrl;
+      let historyPollTimer;
 
       function escapeHtml(value) {
         return value
@@ -202,6 +203,19 @@
             const createdAt = new Date(record.created_at);
             const createdAtLabel = Number.isNaN(createdAt.getTime()) ? "Unknown time" : createdAt.toLocaleString();
             const preview = escapeHtml(truncateText(record.text || ""));
+            const status = escapeHtml(record.status || "unknown");
+            const canPlay = Boolean(record.audio_filename);
+            const canStop = record.status === "in_progress" || record.status === "stopping";
+            const actionButtons = [
+              canPlay
+                ? `<button type=\"button\" data-record-id=\"${escapeHtml(record.id || "")}\">Play</button>`
+                : "",
+              canStop
+                ? `<button type=\"button\" data-stop-record-id=\"${escapeHtml(record.id || "")}\">Stop</button>`
+                : "",
+            ]
+              .filter(Boolean)
+              .join(" ");
 
             return `
               <li class=\"history-item\">
@@ -210,8 +224,9 @@
                     <strong>${escapeHtml(record.voice || "unknown")}</strong>
                     <div>${escapeHtml(record.rate || "")}, ${escapeHtml(record.pitch || "")}</div>
                     <div>${escapeHtml(createdAtLabel)}</div>
+                    <div>Status: <strong>${status}</strong></div>
                   </div>
-                  <button type=\"button\" data-record-id=\"${escapeHtml(record.id || "")}\">Play</button>
+                  <div class="actions">${actionButtons || "<span></span>"}</div>
                 </div>
                 <p class=\"history-preview\">${preview}</p>
               </li>
@@ -224,6 +239,27 @@
             const recordId = button.getAttribute("data-record-id");
             if (!recordId) return;
             playHistoryAudio(recordId);
+          });
+        });
+
+        historyList.querySelectorAll("button[data-stop-record-id]").forEach((button) => {
+          button.addEventListener("click", async () => {
+            const recordId = button.getAttribute("data-stop-record-id");
+            if (!recordId) return;
+
+            try {
+              const response = await fetch(`/api/history/${encodeURIComponent(recordId)}/stop`, {
+                method: "POST",
+              });
+              if (!response.ok) {
+                throw new Error(`Stop request failed: ${response.status}`);
+              }
+
+              setStatus("Stop requested for selected synthesis.");
+              loadHistory();
+            } catch (error) {
+              setStatus(`Failed to stop synthesis: ${String(error)}`, true);
+            }
           });
         });
       }
@@ -341,7 +377,7 @@
         });
 
         socket.addEventListener("close", () => {
-          setStatus("WebSocket disconnected.", true);
+          setStatus("WebSocket disconnected. Background synthesis continues via HTTP API.", true);
         });
 
         socket.addEventListener("message", (event) => {
@@ -358,26 +394,7 @@
           }
 
           if (payload.type === "audio") {
-            const binary = atob(payload.audio_base64);
-            const bytes = new Uint8Array(binary.length);
-            for (let i = 0; i < binary.length; i++) {
-              bytes[i] = binary.charCodeAt(i);
-            }
-
-            const blob = new Blob([bytes], { type: payload.format || "audio/mpeg" });
-            if (currentObjectUrl) URL.revokeObjectURL(currentObjectUrl);
-            currentObjectUrl = URL.createObjectURL(blob);
-
-            audioPlayer.src = currentObjectUrl;
-            audioPlayer.play().catch(() => {
-              // autoplay might be blocked by browser policy
-            });
-
-            downloadLink.href = currentObjectUrl;
-            downloadLink.download = payload.filename || "speech.mp3";
-            downloadLink.style.display = "inline-block";
-
-            setStatus("Synthesis complete. Playing audio and download available.");
+            setStatus("Received audio payload over WebSocket (legacy mode).");
             loadHistory();
           }
         });
@@ -388,27 +405,38 @@
         connectWebSocket();
       });
 
-      synthesizeBtn.addEventListener("click", () => {
+      synthesizeBtn.addEventListener("click", async () => {
         const text = normalizeInputText(textInput.value);
         if (!text) {
           setStatus("Please enter text first.", true);
           return;
         }
 
-        if (!socket || socket.readyState !== WebSocket.OPEN) {
-          setStatus("WebSocket is not connected yet.", true);
-          return;
-        }
+        setStatus("Starting background synthesis...");
 
-        socket.send(
-          JSON.stringify({
-            action: "synthesize",
-            text,
-            voice: voiceSelect.value,
-            rate: rateInput.value.trim() || "+0%",
-            pitch: pitchInput.value.trim() || "+0Hz",
-          })
-        );
+        try {
+          const response = await fetch("/api/synthesis", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              text,
+              voice: voiceSelect.value,
+              rate: rateInput.value.trim() || "+0%",
+              pitch: pitchInput.value.trim() || "+0Hz",
+            }),
+          });
+
+          if (!response.ok) {
+            throw new Error(`Synthesis request failed: ${response.status}`);
+          }
+
+          const payload = await response.json();
+          const recordId = payload.item?.id;
+          setStatus(`Synthesis started in background${recordId ? ` (ID: ${recordId})` : ""}.`);
+          loadHistory();
+        } catch (error) {
+          setStatus(`Failed to start synthesis: ${String(error)}`, true);
+        }
 
         saveInputsToStorage();
       });
@@ -424,6 +452,13 @@
       restoreInputsFromStorage();
       connectWebSocket();
       loadHistory();
+
+      historyPollTimer = setInterval(loadHistory, 4000);
+      window.addEventListener("beforeunload", () => {
+        if (historyPollTimer) {
+          clearInterval(historyPollTimer);
+        }
+      });
     </script>
   </body>
 </html>
