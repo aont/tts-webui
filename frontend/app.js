@@ -98,7 +98,7 @@ downloadButton.addEventListener("click", () => {
   const url = URL.createObjectURL(latestBlob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = "voicevox-output.wav";
+  a.download = "voicevox-output.opus";
   document.body.appendChild(a);
   a.click();
   a.remove();

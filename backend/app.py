@@ -3,6 +3,8 @@ import asyncio
 import io
 import os
 import re
+import subprocess
+import tempfile
 import wave
 from typing import Iterable, List
 
@@ -129,6 +131,36 @@ def concat_wavs(wav_blobs: Iterable[bytes]) -> bytes:
     return merged.getvalue()
 
 
+def encode_wav_to_opus(wav_blob: bytes) -> bytes:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        wav_path = os.path.join(temp_dir, "input.wav")
+        opus_path = os.path.join(temp_dir, "output.opus")
+
+        with open(wav_path, "wb") as wav_file:
+            wav_file.write(wav_blob)
+
+        try:
+            subprocess.run(
+                [
+                    "opusenc",
+                    "--quiet",
+                    wav_path,
+                    opus_path,
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError as exc:
+            raise RuntimeError("opusenc command is not available") from exc
+        except subprocess.CalledProcessError as exc:
+            stderr = (exc.stderr or "").strip()
+            raise RuntimeError(f"failed to encode audio to opus: {stderr}") from exc
+
+        with open(opus_path, "rb") as opus_file:
+            return opus_file.read()
+
+
 async def handle_index(_: web.Request) -> web.Response:
     return web.FileResponse("frontend/index.html")
 
@@ -163,18 +195,21 @@ async def handle_synthesize(request: web.Request) -> web.Response:
             wav_parts = await asyncio.gather(*synthesis_tasks)
 
         merged_wav = concat_wavs(wav_parts)
+        merged_opus = encode_wav_to_opus(merged_wav)
     except ClientError as exc:
         return web.json_response(
             {"error": f"failed to connect to VOICEVOX engine at {VOICEVOX_BASE_URL}: {exc}"},
             status=502,
         )
+    except RuntimeError as exc:
+        return web.json_response({"error": str(exc)}, status=500)
 
     headers = {
-        "Content-Disposition": "attachment; filename=voicevox-output.wav",
+        "Content-Disposition": "attachment; filename=voicevox-output.opus",
         "X-Chunk-Count": str(len(chunks)),
         "X-Normalized-Length": str(len(text)),
     }
-    return web.Response(body=merged_wav, content_type="audio/wav", headers=headers)
+    return web.Response(body=merged_opus, content_type="audio/ogg", headers=headers)
 
 
 async def handle_speakers(_: web.Request) -> web.Response:
