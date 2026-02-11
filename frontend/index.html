@@ -46,6 +46,47 @@
         align-items: center;
         margin-bottom: 1rem;
       }
+      .history-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-top: 1.2rem;
+        margin-bottom: 0.6rem;
+      }
+      .history-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+      }
+      .history-item {
+        border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+        border-radius: 8px;
+        padding: 0.7rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.4rem;
+      }
+      .history-item-main {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        flex-wrap: wrap;
+      }
+      .history-meta {
+        font-size: 0.9rem;
+        opacity: 0.85;
+      }
+      .history-preview {
+        white-space: pre-wrap;
+        word-break: break-word;
+        margin: 0;
+      }
+      .history-item button {
+        width: fit-content;
+      }
       #status {
         min-height: 1.4rem;
         margin-bottom: 1rem;
@@ -94,6 +135,12 @@
     <div id="status"></div>
     <audio id="audioPlayer" controls></audio>
 
+    <div class="history-header">
+      <h2>Synthesis History</h2>
+      <button id="refreshHistoryBtn" type="button">Refresh</button>
+    </div>
+    <ul id="historyList" class="history-list"></ul>
+
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script>
       const statusEl = document.getElementById("status");
@@ -106,6 +153,8 @@
       const synthesizeBtn = document.getElementById("synthesizeBtn");
       const audioPlayer = document.getElementById("audioPlayer");
       const downloadLink = document.getElementById("downloadLink");
+      const historyList = document.getElementById("historyList");
+      const refreshHistoryBtn = document.getElementById("refreshHistoryBtn");
 
       const STORAGE_KEYS = {
         text: "edgeTtsWebUi.text",
@@ -117,6 +166,82 @@
 
       let socket;
       let currentObjectUrl;
+
+      function escapeHtml(value) {
+        return value
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll("\"", "&quot;")
+          .replaceAll("'", "&#39;");
+      }
+
+      function truncateText(value, maxLength = 220) {
+        return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
+      }
+
+      function playHistoryAudio(recordId) {
+        const audioUrl = `/api/history/${encodeURIComponent(recordId)}/audio`;
+        audioPlayer.src = audioUrl;
+        audioPlayer.play().catch(() => {
+          // autoplay might be blocked by browser policy
+        });
+        downloadLink.href = audioUrl;
+        downloadLink.download = `${recordId}.mp3`;
+        downloadLink.style.display = "inline-block";
+      }
+
+      function renderHistory(records) {
+        if (!records.length) {
+          historyList.innerHTML = "<li class=\"history-item\">No synthesis history yet.</li>";
+          return;
+        }
+
+        historyList.innerHTML = records
+          .map((record) => {
+            const createdAt = new Date(record.created_at);
+            const createdAtLabel = Number.isNaN(createdAt.getTime()) ? "Unknown time" : createdAt.toLocaleString();
+            const preview = escapeHtml(truncateText(record.text || ""));
+
+            return `
+              <li class=\"history-item\">
+                <div class=\"history-item-main\">
+                  <div class=\"history-meta\">
+                    <strong>${escapeHtml(record.voice || "unknown")}</strong>
+                    <div>${escapeHtml(record.rate || "")}, ${escapeHtml(record.pitch || "")}</div>
+                    <div>${escapeHtml(createdAtLabel)}</div>
+                  </div>
+                  <button type=\"button\" data-record-id=\"${escapeHtml(record.id || "")}\">Play</button>
+                </div>
+                <p class=\"history-preview\">${preview}</p>
+              </li>
+            `;
+          })
+          .join("");
+
+        historyList.querySelectorAll("button[data-record-id]").forEach((button) => {
+          button.addEventListener("click", () => {
+            const recordId = button.getAttribute("data-record-id");
+            if (!recordId) return;
+            playHistoryAudio(recordId);
+          });
+        });
+      }
+
+      async function loadHistory() {
+        try {
+          const response = await fetch("/api/history");
+          if (!response.ok) {
+            throw new Error(`History request failed: ${response.status}`);
+          }
+
+          const payload = await response.json();
+          const records = Array.isArray(payload.items) ? payload.items : [];
+          renderHistory(records);
+        } catch (error) {
+          historyList.innerHTML = `<li class=\"history-item\">Failed to load history: ${escapeHtml(String(error))}</li>`;
+        }
+      }
 
       function htmlToText(input) {
         const doc = new DOMParser().parseFromString(input, "text/html");
@@ -253,6 +378,7 @@
             downloadLink.style.display = "inline-block";
 
             setStatus("Synthesis complete. Playing audio and download available.");
+            loadHistory();
           }
         });
       }
@@ -292,10 +418,12 @@
       rateInput.addEventListener("input", saveInputsToStorage);
       pitchInput.addEventListener("input", saveInputsToStorage);
       wsUrlInput.addEventListener("input", saveInputsToStorage);
+      refreshHistoryBtn.addEventListener("click", loadHistory);
 
       wsUrlInput.value = getDefaultWsUrl();
       restoreInputsFromStorage();
       connectWebSocket();
+      loadHistory();
     </script>
   </body>
 </html>
