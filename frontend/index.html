@@ -13,6 +13,11 @@
       audio { width: 100%; margin-top: 1rem; }
       label { display: block; font-weight: bold; margin-bottom: 0.3rem; }
       input, select { width: 100%; padding: 0.45rem; }
+      .history { margin-top: 2rem; }
+      .history ul { list-style: none; padding: 0; display: grid; gap: 0.8rem; }
+      .history li { border: 1px solid #ddd; border-radius: 6px; padding: 0.8rem; }
+      .history-text { margin-top: 0.4rem; white-space: pre-wrap; }
+      .history-meta { margin: 0.3rem 0 0.6rem; font-size: 0.9rem; color: #555; }
     </style>
   </head>
   <body>
@@ -57,9 +62,16 @@
     <button id="synthesizeButton">Synthesize</button>
     <button id="reloadSpeakersButton">Reload Speakers</button>
     <button id="downloadButton" disabled>Download WAV</button>
+    <button id="refreshHistoryButton">Refresh History</button>
 
     <audio id="audioPlayer" controls></audio>
     <div id="status"></div>
+
+    <section class="history">
+      <h2>Synthesis History</h2>
+      <p>Review past synthesized text/settings and replay the saved audio.</p>
+      <ul id="historyList"></ul>
+    </section>
 
     <script src="./app.js"></script>
   </body>

@@ -1,11 +1,14 @@
 import argparse
 import asyncio
+import datetime as dt
 import io
 import os
 import re
 import subprocess
 import tempfile
+import uuid
 import wave
+from collections import deque
 from typing import Iterable, List
 
 import markdown as md_lib
@@ -15,6 +18,26 @@ from bs4 import BeautifulSoup
 VOICEVOX_BASE_URL = "http://localhost:50021"
 REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "120"))
 MAX_CHUNK_CHARS = int(os.getenv("MAX_CHUNK_CHARS", "120"))
+MAX_HISTORY_ITEMS = int(os.getenv("MAX_HISTORY_ITEMS", "20"))
+
+
+def now_iso() -> str:
+    return dt.datetime.now(dt.timezone.utc).isoformat()
+
+
+def history_to_json(item: dict) -> dict:
+    return {
+        "id": item["id"],
+        "created_at": item["created_at"],
+        "text": item["text"],
+        "speaker": item["speaker"],
+        "input_format": item["input_format"],
+        "max_chunk_chars": item["max_chunk_chars"],
+        "speed_scale": item["speed_scale"],
+        "pitch_scale": item["pitch_scale"],
+        "chunk_count": item["chunk_count"],
+        "normalized_length": item["normalized_length"],
+    }
 
 
 def html_to_text(html: str) -> str:
@@ -175,9 +198,38 @@ async def handle_health(_: web.Request) -> web.Response:
     return web.json_response({"status": "ok", "voicevox_base_url": VOICEVOX_BASE_URL})
 
 
+
+def add_history_item(app: web.Application, item: dict) -> None:
+    history_items = app["history_items"]
+    history_audio = app["history_audio"]
+
+    history_items.appendleft(item)
+    history_audio[item["id"]] = item["audio"]
+
+    while len(history_items) > app["max_history_items"]:
+        evicted = history_items.pop()
+        history_audio.pop(evicted["id"], None)
+
+
+async def handle_history(request: web.Request) -> web.Response:
+    history_items = request.app["history_items"]
+    return web.json_response({"items": [history_to_json(item) for item in history_items]})
+
+
+async def handle_history_audio(request: web.Request) -> web.Response:
+    item_id = request.match_info["item_id"]
+    audio = request.app["history_audio"].get(item_id)
+    if audio is None:
+        return web.json_response({"error": "history item not found"}, status=404)
+
+    headers = {"Content-Disposition": f"attachment; filename=voicevox-history-{item_id}.opus"}
+    return web.Response(body=audio, content_type="audio/ogg", headers=headers)
+
+
 async def handle_synthesize(request: web.Request) -> web.Response:
     payload = await request.json()
-    text = normalize_text(payload.get("text", ""), payload.get("input_format", "auto"))
+    input_format_value = payload.get("input_format", "auto")
+    text = normalize_text(payload.get("text", ""), input_format_value)
     speaker = int(payload.get("speaker", 1))
     max_chunk_chars = int(payload.get("max_chunk_chars", MAX_CHUNK_CHARS))
     speed_scale = float(payload.get("speed_scale", 1.0))
@@ -219,10 +271,29 @@ async def handle_synthesize(request: web.Request) -> web.Response:
     except RuntimeError as exc:
         return web.json_response({"error": str(exc)}, status=500)
 
+    history_id = str(uuid.uuid4())
+    add_history_item(
+        request.app,
+        {
+            "id": history_id,
+            "created_at": now_iso(),
+            "text": text,
+            "speaker": speaker,
+            "input_format": input_format_value,
+            "max_chunk_chars": max_chunk_chars,
+            "speed_scale": speed_scale,
+            "pitch_scale": pitch_scale,
+            "chunk_count": len(chunks),
+            "normalized_length": len(text),
+            "audio": merged_opus,
+        },
+    )
+
     headers = {
         "Content-Disposition": "attachment; filename=voicevox-output.opus",
         "X-Chunk-Count": str(len(chunks)),
         "X-Normalized-Length": str(len(text)),
+        "X-History-Id": history_id,
     }
     return web.Response(body=merged_opus, content_type="audio/ogg", headers=headers)
 
@@ -245,7 +316,13 @@ async def handle_speakers(_: web.Request) -> web.Response:
 def build_app(serve_frontend: bool = True) -> web.Application:
     app = web.Application()
     app.router.add_get("/api/health", handle_health)
+    app["history_items"] = deque()
+    app["history_audio"] = {}
+    app["max_history_items"] = MAX_HISTORY_ITEMS
+
     app.router.add_get("/api/speakers", handle_speakers)
+    app.router.add_get("/api/history", handle_history)
+    app.router.add_get("/api/history/{item_id}/audio", handle_history_audio)
     app.router.add_post("/api/synthesize", handle_synthesize)
 
     if serve_frontend:

@@ -8,6 +8,8 @@ const pitchScale = document.getElementById("pitchScale");
 const synthesizeButton = document.getElementById("synthesizeButton");
 const reloadSpeakersButton = document.getElementById("reloadSpeakersButton");
 const downloadButton = document.getElementById("downloadButton");
+const refreshHistoryButton = document.getElementById("refreshHistoryButton");
+const historyList = document.getElementById("historyList");
 const audioPlayer = document.getElementById("audioPlayer");
 const statusEl = document.getElementById("status");
 
@@ -63,6 +65,71 @@ function saveInputs() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
 }
 
+function setStatus(message) {
+  statusEl.textContent = message;
+}
+
+function renderHistory(items) {
+  historyList.innerHTML = "";
+  if (!Array.isArray(items) || items.length === 0) {
+    const li = document.createElement("li");
+    li.textContent = "No synthesis history yet.";
+    historyList.appendChild(li);
+    return;
+  }
+
+  for (const item of items) {
+    const li = document.createElement("li");
+    const topLine = document.createElement("div");
+    const createdAt = new Date(item.created_at).toLocaleString();
+    topLine.textContent = `${createdAt} | speaker=${item.speaker} | chunks=${item.chunk_count}`;
+
+    const textLine = document.createElement("div");
+    textLine.className = "history-text";
+    textLine.textContent = item.text;
+
+    const cfgLine = document.createElement("div");
+    cfgLine.className = "history-meta";
+    cfgLine.textContent = `format=${item.input_format}, max_chunk_chars=${item.max_chunk_chars}, speed=${item.speed_scale}, pitch=${item.pitch_scale}`;
+
+    const playButton = document.createElement("button");
+    playButton.type = "button";
+    playButton.textContent = "Play";
+    playButton.addEventListener("click", async () => {
+      try {
+        setStatus("Loading history audio...");
+        const res = await fetch(getApiUrl(`/api/history/${item.id}/audio`));
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const blob = await res.blob();
+        latestBlob = blob;
+        audioPlayer.src = URL.createObjectURL(blob);
+        audioPlayer.play();
+        downloadButton.disabled = false;
+        setStatus("Loaded history audio.");
+      } catch (err) {
+        setStatus(`Failed to load history audio: ${err.message}`);
+      }
+    });
+
+    li.appendChild(topLine);
+    li.appendChild(textLine);
+    li.appendChild(cfgLine);
+    li.appendChild(playButton);
+    historyList.appendChild(li);
+  }
+}
+
+async function loadHistory() {
+  try {
+    const res = await fetch(getApiUrl("/api/history"));
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    renderHistory(data.items || []);
+  } catch (err) {
+    setStatus(`Failed to load history: ${err.message}`);
+  }
+}
+
 async function loadSpeakers() {
   try {
     const res = await fetch(getApiUrl("/api/speakers"));
@@ -105,10 +172,6 @@ async function loadSpeakers() {
   }
 }
 
-function setStatus(message) {
-  statusEl.textContent = message;
-}
-
 [textInput, backendEndpoint, inputFormat, speakerSelect, maxChunkChars, speedScale, pitchScale].forEach((el) => {
   el.addEventListener("input", saveInputs);
   el.addEventListener("change", saveInputs);
@@ -119,6 +182,14 @@ reloadSpeakersButton.addEventListener("click", async () => {
   await loadSpeakers();
   if (!statusEl.textContent.startsWith("Failed")) {
     setStatus("Speakers updated.");
+  }
+});
+
+refreshHistoryButton.addEventListener("click", async () => {
+  setStatus("Loading history...");
+  await loadHistory();
+  if (!statusEl.textContent.startsWith("Failed")) {
+    setStatus("History updated.");
   }
 });
 
@@ -169,6 +240,7 @@ synthesizeButton.addEventListener("click", async () => {
     const normalizedLen = res.headers.get("X-Normalized-Length") || "?";
     setStatus(`Done. Chunks: ${chunkCount}, normalized length: ${normalizedLen} chars.`);
     downloadButton.disabled = false;
+    await loadHistory();
   } catch (err) {
     setStatus(err.message);
   } finally {
@@ -194,3 +266,4 @@ downloadButton.addEventListener("click", () => {
 
 loadSavedInputs();
 loadSpeakers();
+loadHistory();
