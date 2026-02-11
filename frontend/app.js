@@ -14,8 +14,10 @@ const audioPlayer = document.getElementById("audioPlayer");
 const statusEl = document.getElementById("status");
 
 const STORAGE_KEY = "voicevox-webui-form";
+const HISTORY_REFRESH_MS = 3000;
 
 let latestBlob = null;
+let autoRefreshTimer = null;
 
 function normalizeEndpoint(value) {
   const trimmed = value.trim();
@@ -69,12 +71,36 @@ function setStatus(message) {
   statusEl.textContent = message;
 }
 
+function hasInProgress(items) {
+  return Array.isArray(items) && items.some((item) => item.status === "in_progress");
+}
+
+function setAutoRefresh(enabled) {
+  if (autoRefreshTimer) {
+    clearInterval(autoRefreshTimer);
+    autoRefreshTimer = null;
+  }
+
+  if (enabled) {
+    autoRefreshTimer = setInterval(() => {
+      loadHistory({ silent: true });
+    }, HISTORY_REFRESH_MS);
+  }
+}
+
+function formatStatusText(item) {
+  const status = item.status || "completed";
+  const error = item.error ? ` (${item.error})` : "";
+  return `status=${status}${error}`;
+}
+
 function renderHistory(items) {
   historyList.innerHTML = "";
   if (!Array.isArray(items) || items.length === 0) {
     const li = document.createElement("li");
     li.textContent = "No synthesis history yet.";
     historyList.appendChild(li);
+    setAutoRefresh(false);
     return;
   }
 
@@ -92,9 +118,14 @@ function renderHistory(items) {
     cfgLine.className = "history-meta";
     cfgLine.textContent = `format=${item.input_format}, max_chunk_chars=${item.max_chunk_chars}, speed=${item.speed_scale}, pitch=${item.pitch_scale}`;
 
+    const statusLine = document.createElement("div");
+    statusLine.className = "history-meta";
+    statusLine.textContent = formatStatusText(item);
+
     const playButton = document.createElement("button");
     playButton.type = "button";
     playButton.textContent = "Play";
+    playButton.disabled = item.status !== "completed";
     playButton.addEventListener("click", async () => {
       try {
         setStatus("Loading history audio...");
@@ -111,22 +142,51 @@ function renderHistory(items) {
       }
     });
 
+    const stopButton = document.createElement("button");
+    stopButton.type = "button";
+    stopButton.textContent = "Stop";
+    stopButton.disabled = item.status !== "in_progress";
+    stopButton.addEventListener("click", async () => {
+      stopButton.disabled = true;
+      try {
+        const res = await fetch(getApiUrl(`/api/synthesize/${item.id}/stop`), {
+          method: "POST",
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data.error || `HTTP ${res.status}`);
+        }
+        setStatus(`Stop requested for synthesis ${item.id}.`);
+        await loadHistory();
+      } catch (err) {
+        setStatus(`Failed to stop synthesis: ${err.message}`);
+        stopButton.disabled = false;
+      }
+    });
+
     li.appendChild(topLine);
     li.appendChild(textLine);
     li.appendChild(cfgLine);
+    li.appendChild(statusLine);
     li.appendChild(playButton);
+    li.appendChild(stopButton);
     historyList.appendChild(li);
   }
+
+  setAutoRefresh(hasInProgress(items));
 }
 
-async function loadHistory() {
+async function loadHistory(options = {}) {
+  const { silent = false } = options;
   try {
     const res = await fetch(getApiUrl("/api/history"));
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     renderHistory(data.items || []);
   } catch (err) {
-    setStatus(`Failed to load history: ${err.message}`);
+    if (!silent) {
+      setStatus(`Failed to load history: ${err.message}`);
+    }
   }
 }
 
@@ -202,8 +262,7 @@ synthesizeButton.addEventListener("click", async () => {
 
   saveInputs();
   synthesizeButton.disabled = true;
-  downloadButton.disabled = true;
-  setStatus("Synthesizing...");
+  setStatus("Starting synthesis...");
 
   try {
     const payload = {
@@ -215,31 +274,18 @@ synthesizeButton.addEventListener("click", async () => {
       pitch_scale: Number(pitchScale.value || 0.0),
     };
 
-    const res = await fetch(getApiUrl("/api/synthesize"), {
+    const res = await fetch(getApiUrl("/api/synthesize/start"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
 
+    const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      let detail = "";
-      try {
-        const json = await res.json();
-        detail = json.error || JSON.stringify(json);
-      } catch {
-        detail = await res.text();
-      }
-      throw new Error(`Synthesis failed: HTTP ${res.status} ${detail}`);
+      throw new Error(data.error || `Synthesis start failed: HTTP ${res.status}`);
     }
 
-    latestBlob = await res.blob();
-    const audioUrl = URL.createObjectURL(latestBlob);
-    audioPlayer.src = audioUrl;
-
-    const chunkCount = res.headers.get("X-Chunk-Count") || "?";
-    const normalizedLen = res.headers.get("X-Normalized-Length") || "?";
-    setStatus(`Done. Chunks: ${chunkCount}, normalized length: ${normalizedLen} chars.`);
-    downloadButton.disabled = false;
+    setStatus(`Synthesis started (history id: ${data.id}). You can continue browsing and check progress in history.`);
     await loadHistory();
   } catch (err) {
     setStatus(err.message);

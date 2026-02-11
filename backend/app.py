@@ -29,6 +29,9 @@ def history_to_json(item: dict) -> dict:
     return {
         "id": item["id"],
         "created_at": item["created_at"],
+        "updated_at": item.get("updated_at", item["created_at"]),
+        "status": item.get("status", "completed"),
+        "error": item.get("error"),
         "text": item["text"],
         "speaker": item["speaker"],
         "input_format": item["input_format"],
@@ -209,6 +212,19 @@ def add_history_item(app: web.Application, item: dict) -> None:
     while len(history_items) > app["max_history_items"]:
         evicted = history_items.pop()
         history_audio.pop(evicted["id"], None)
+        running_task = app["synthesis_tasks"].pop(evicted["id"], None)
+        if running_task and not running_task.done():
+            running_task.cancel()
+
+
+def update_history_item(app: web.Application, item_id: str, **fields: object) -> dict | None:
+    history_items = app["history_items"]
+    for item in history_items:
+        if item["id"] == item_id:
+            item.update(fields)
+            item["updated_at"] = now_iso()
+            return item
+    return None
 
 
 async def handle_history(request: web.Request) -> web.Response:
@@ -218,12 +234,123 @@ async def handle_history(request: web.Request) -> web.Response:
 
 async def handle_history_audio(request: web.Request) -> web.Response:
     item_id = request.match_info["item_id"]
+    item = next((history_item for history_item in request.app["history_items"] if history_item["id"] == item_id), None)
+    if item is None:
+        return web.json_response({"error": "history item not found"}, status=404)
+
+    if item.get("status") != "completed":
+        return web.json_response({"error": f"audio is not available for status '{item.get('status')}'"}, status=409)
+
     audio = request.app["history_audio"].get(item_id)
     if audio is None:
         return web.json_response({"error": "history item not found"}, status=404)
 
     headers = {"Content-Disposition": f"attachment; filename=voicevox-history-{item_id}.opus"}
     return web.Response(body=audio, content_type="audio/ogg", headers=headers)
+
+
+async def run_synthesis_job(app: web.Application, job_id: str, chunks: List[str], speaker: int, speed_scale: float, pitch_scale: float) -> None:
+    timeout = ClientTimeout(total=REQUEST_TIMEOUT_SECONDS)
+    try:
+        async with ClientSession(timeout=timeout) as session:
+            queries = [
+                voicevox_query(session, chunk, speaker, speed_scale, pitch_scale)
+                for chunk in chunks
+            ]
+            query_results = await asyncio.gather(*queries)
+
+            synthesis_tasks = [
+                voicevox_synthesis(session, query_result, speaker)
+                for query_result in query_results
+            ]
+            wav_parts = await asyncio.gather(*synthesis_tasks)
+
+        merged_wav = concat_wavs(wav_parts)
+        merged_opus = encode_wav_to_opus(merged_wav)
+        app["history_audio"][job_id] = merged_opus
+        update_history_item(app, job_id, status="completed")
+    except asyncio.CancelledError:
+        update_history_item(app, job_id, status="stopped", error="stopped by user")
+        raise
+    except ClientError as exc:
+        update_history_item(
+            app,
+            job_id,
+            status="failed",
+            error=f"failed to connect to VOICEVOX engine at {VOICEVOX_BASE_URL}: {exc}",
+        )
+    except RuntimeError as exc:
+        update_history_item(app, job_id, status="failed", error=str(exc))
+    except Exception as exc:
+        update_history_item(app, job_id, status="failed", error=f"unexpected error: {exc}")
+    finally:
+        app["synthesis_tasks"].pop(job_id, None)
+
+
+async def handle_synthesize_start(request: web.Request) -> web.Response:
+    payload = await request.json()
+    input_format_value = payload.get("input_format", "auto")
+    text = normalize_text(payload.get("text", ""), input_format_value)
+    speaker = int(payload.get("speaker", 1))
+    max_chunk_chars = int(payload.get("max_chunk_chars", MAX_CHUNK_CHARS))
+    speed_scale = float(payload.get("speed_scale", 1.0))
+    pitch_scale = float(payload.get("pitch_scale", 0.0))
+
+    if not text:
+        return web.json_response({"error": "text is empty after preprocessing"}, status=400)
+    if max_chunk_chars < 8:
+        return web.json_response({"error": "max_chunk_chars must be >= 8"}, status=400)
+    if not (0.5 <= speed_scale <= 2.0):
+        return web.json_response({"error": "speed_scale must be between 0.5 and 2.0"}, status=400)
+    if not (-0.15 <= pitch_scale <= 0.15):
+        return web.json_response({"error": "pitch_scale must be between -0.15 and 0.15"}, status=400)
+
+    chunks = split_text(text, max_chunk_chars)
+    history_id = str(uuid.uuid4())
+    add_history_item(
+        request.app,
+        {
+            "id": history_id,
+            "created_at": now_iso(),
+            "updated_at": now_iso(),
+            "status": "in_progress",
+            "error": None,
+            "text": text,
+            "speaker": speaker,
+            "input_format": input_format_value,
+            "max_chunk_chars": max_chunk_chars,
+            "speed_scale": speed_scale,
+            "pitch_scale": pitch_scale,
+            "chunk_count": len(chunks),
+            "normalized_length": len(text),
+            "audio": b"",
+        },
+    )
+
+    task = asyncio.create_task(
+        run_synthesis_job(request.app, history_id, chunks, speaker, speed_scale, pitch_scale)
+    )
+    request.app["synthesis_tasks"][history_id] = task
+
+    return web.json_response({"id": history_id, "status": "in_progress"}, status=202)
+
+
+async def handle_stop_synthesis(request: web.Request) -> web.Response:
+    item_id = request.match_info["item_id"]
+    item = update_history_item(request.app, item_id)
+    if item is None:
+        return web.json_response({"error": "history item not found"}, status=404)
+
+    if item.get("status") != "in_progress":
+        return web.json_response({"error": f"cannot stop synthesis with status '{item.get('status')}'"}, status=409)
+
+    task = request.app["synthesis_tasks"].get(item_id)
+    if task is None:
+        update_history_item(request.app, item_id, status="stopped", error="stopped by user")
+        return web.json_response({"id": item_id, "status": "stopped"})
+
+    task.cancel()
+    return web.json_response({"id": item_id, "status": "stopping"})
 
 
 async def handle_synthesize(request: web.Request) -> web.Response:
@@ -319,11 +446,14 @@ def build_app(serve_frontend: bool = True) -> web.Application:
     app["history_items"] = deque()
     app["history_audio"] = {}
     app["max_history_items"] = MAX_HISTORY_ITEMS
+    app["synthesis_tasks"] = {}
 
     app.router.add_get("/api/speakers", handle_speakers)
     app.router.add_get("/api/history", handle_history)
     app.router.add_get("/api/history/{item_id}/audio", handle_history_audio)
     app.router.add_post("/api/synthesize", handle_synthesize)
+    app.router.add_post("/api/synthesize/start", handle_synthesize_start)
+    app.router.add_post("/api/synthesize/{item_id}/stop", handle_stop_synthesis)
 
     if serve_frontend:
         app.router.add_get("/", handle_index)
