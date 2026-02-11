@@ -59,7 +59,7 @@
     <h1>Edge TTS WebSocket Demo</h1>
     <p>
       Enter text and synthesize speech using <code>edge-tts</code>. Communication between frontend and backend happens via
-      <code>/ws</code>.
+      WebSocket.
     </p>
 
     <textarea id="textInput" placeholder="Type text to synthesize..."></textarea>
@@ -82,6 +82,11 @@
         <label for="pitchInput">Pitch:</label>
         <input id="pitchInput" type="text" value="+0Hz" placeholder="e.g. +5Hz" />
       </div>
+      <div class="control-group">
+        <label for="wsUrlInput">Backend WS URL:</label>
+        <input id="wsUrlInput" type="text" placeholder="wss://example.com/ws" style="width: 18rem" />
+      </div>
+      <button id="connectBtn" type="button">Connect</button>
       <button id="synthesizeBtn" type="button">Synthesize</button>
       <a id="downloadLink" href="#" download="speech.mp3" style="display: none">Download audio</a>
     </div>
@@ -96,6 +101,8 @@
       const voiceSelect = document.getElementById("voiceSelect");
       const rateInput = document.getElementById("rateInput");
       const pitchInput = document.getElementById("pitchInput");
+      const wsUrlInput = document.getElementById("wsUrlInput");
+      const connectBtn = document.getElementById("connectBtn");
       const synthesizeBtn = document.getElementById("synthesizeBtn");
       const audioPlayer = document.getElementById("audioPlayer");
       const downloadLink = document.getElementById("downloadLink");
@@ -142,17 +149,30 @@
         statusEl.style.color = isError ? "crimson" : "inherit";
       }
 
-      function connectWebSocket() {
+      function getDefaultWsUrl() {
         const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-        socket = new WebSocket(`${protocol}://${window.location.host}/ws`);
+        return `${protocol}://${window.location.host}/ws`;
+      }
+
+      function getConfiguredWsUrl() {
+        return wsUrlInput.value.trim() || getDefaultWsUrl();
+      }
+
+      function connectWebSocket() {
+        const wsUrl = getConfiguredWsUrl();
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.close();
+        }
+
+        setStatus(`Connecting to ${wsUrl}...`);
+        socket = new WebSocket(wsUrl);
 
         socket.addEventListener("open", () => {
           setStatus("WebSocket connected.");
         });
 
         socket.addEventListener("close", () => {
-          setStatus("WebSocket disconnected. Reconnecting in 2 seconds...", true);
-          setTimeout(connectWebSocket, 2000);
+          setStatus("WebSocket disconnected.", true);
         });
 
         socket.addEventListener("message", (event) => {
@@ -193,6 +213,10 @@
         });
       }
 
+      connectBtn.addEventListener("click", () => {
+        connectWebSocket();
+      });
+
       synthesizeBtn.addEventListener("click", () => {
         const text = normalizeInputText(textInput.value);
         if (!text) {
@@ -216,6 +240,7 @@
         );
       });
 
+      wsUrlInput.value = getDefaultWsUrl();
       connectWebSocket();
     </script>
   </body>

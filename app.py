@@ -1,4 +1,5 @@
 import base64
+import argparse
 import json
 from pathlib import Path
 
@@ -7,7 +8,7 @@ import edge_tts
 
 
 BASE_DIR = Path(__file__).parent
-STATIC_DIR = BASE_DIR / "static"
+FRONTEND_DIR = BASE_DIR / "frontend"
 MAX_SEGMENT_CHARS = 3000
 
 
@@ -130,21 +131,50 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
 
 
 async def index_handler(_: web.Request) -> web.FileResponse:
-    return web.FileResponse(STATIC_DIR / "index.html")
+    return web.FileResponse(FRONTEND_DIR / "index.html")
 
 
 async def health_handler(_: web.Request) -> web.Response:
     return web.json_response({"status": "ok"})
 
 
-def create_app() -> web.Application:
+def create_app(serve_frontend: bool = True) -> web.Application:
     app = web.Application()
-    app.router.add_get("/", index_handler)
+
+    if serve_frontend:
+        app.router.add_get("/", index_handler)
+        app.router.add_static("/frontend", FRONTEND_DIR)
+
     app.router.add_get("/health", health_handler)
     app.router.add_get("/ws", ws_handler)
-    app.router.add_static("/static", STATIC_DIR)
     return app
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Edge TTS WebSocket server")
+    parser.add_argument(
+        "--host",
+        default="0.0.0.0",
+        help="Host interface to bind (default: 0.0.0.0)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8080,
+        help="Port to bind (default: 8080)",
+    )
+    parser.add_argument(
+        "--no-frontend",
+        action="store_true",
+        help="Disable serving frontend files from this process",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    web.run_app(create_app(), host="0.0.0.0", port=8080)
+    args = parse_args()
+    web.run_app(
+        create_app(serve_frontend=not args.no_frontend),
+        host=args.host,
+        port=args.port,
+    )
