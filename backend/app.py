@@ -10,7 +10,7 @@ import markdown as md_lib
 from aiohttp import ClientError, ClientSession, ClientTimeout, web
 from bs4 import BeautifulSoup
 
-VOICEVOX_BASE_URL = os.getenv("VOICEVOX_BASE_URL", "http://localhost:50021").rstrip("/")
+VOICEVOX_BASE_URL = "http://localhost:50021"
 REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "120"))
 MAX_CHUNK_CHARS = int(os.getenv("MAX_CHUNK_CHARS", "120"))
 
@@ -208,6 +208,11 @@ def build_app(serve_frontend: bool = True) -> web.Application:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="VOICEVOX WebUI backend server")
     parser.add_argument(
+        "--voicevox-base-url",
+        default="http://localhost:50021",
+        help="Base URL of the VOICEVOX engine (default: %(default)s)",
+    )
+    parser.add_argument(
         "--host",
         default=os.getenv("HOST", "0.0.0.0"),
         help="Host to bind (default: %(default)s)",
@@ -228,5 +233,6 @@ def parse_args() -> argparse.Namespace:
 
 if __name__ == "__main__":
     args = parse_args()
+    VOICEVOX_BASE_URL = args.voicevox_base_url.rstrip("/")
     app = build_app(serve_frontend=not args.no_frontend)
     web.run_app(app, host=args.host, port=args.port)
