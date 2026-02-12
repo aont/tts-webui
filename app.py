@@ -1,10 +1,14 @@
 import argparse
 import asyncio
 from datetime import datetime, timezone
+import io
 import json
 from pathlib import Path
+import subprocess
+import tempfile
 from typing import Any
 from uuid import uuid4
+import wave
 
 from aiohttp import ClientError, ClientSession, web
 import edge_tts
@@ -152,7 +156,7 @@ async def synthesize_speech_voicevox(
     if stop_event.is_set():
         raise SynthesisStoppedError("Synthesis stopped by user")
 
-    audio_chunks: list[bytes] = []
+    wav_chunks: list[bytes] = []
 
     async with ClientSession() as session:
         for text_segment in split_text_segments(text):
@@ -183,9 +187,70 @@ async def synthesize_speech_voicevox(
                     raise RuntimeError(
                         f"VoiceVox synthesis failed ({synth_response.status}): {error_body}"
                     )
-                audio_chunks.append(await synth_response.read())
+                wav_chunks.append(await synth_response.read())
 
-    return b"".join(audio_chunks)
+    return encode_voicevox_wav_chunks_to_opus(wav_chunks)
+
+
+def encode_voicevox_wav_chunks_to_opus(wav_chunks: list[bytes]) -> bytes:
+    if not wav_chunks:
+        return b""
+
+    channels: int | None = None
+    sample_width: int | None = None
+    frame_rate: int | None = None
+    pcm_frames: list[bytes] = []
+
+    for chunk in wav_chunks:
+        with wave.open(io.BytesIO(chunk), "rb") as wav_reader:
+            chunk_channels = wav_reader.getnchannels()
+            chunk_sample_width = wav_reader.getsampwidth()
+            chunk_frame_rate = wav_reader.getframerate()
+
+            if channels is None:
+                channels = chunk_channels
+                sample_width = chunk_sample_width
+                frame_rate = chunk_frame_rate
+            elif (
+                chunk_channels != channels
+                or chunk_sample_width != sample_width
+                or chunk_frame_rate != frame_rate
+            ):
+                raise RuntimeError("VoiceVox returned WAV chunks with mismatched audio format")
+
+            pcm_frames.append(wav_reader.readframes(wav_reader.getnframes()))
+
+    if channels is None or sample_width is None or frame_rate is None:
+        return b""
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        input_wav_path = Path(temp_dir) / "voicevox_input.wav"
+        output_opus_path = Path(temp_dir) / "voicevox_output.opus"
+
+        with wave.open(str(input_wav_path), "wb") as wav_writer:
+            wav_writer.setnchannels(channels)
+            wav_writer.setsampwidth(sample_width)
+            wav_writer.setframerate(frame_rate)
+            wav_writer.writeframes(b"".join(pcm_frames))
+
+        try:
+            subprocess.run(
+                [
+                    "opusenc",
+                    "--quiet",
+                    str(input_wav_path),
+                    str(output_opus_path),
+                ],
+                check=True,
+                capture_output=True,
+            )
+        except FileNotFoundError as exc:
+            raise RuntimeError("opusenc command was not found") from exc
+        except subprocess.CalledProcessError as exc:
+            stderr_output = exc.stderr.decode("utf-8", errors="replace")
+            raise RuntimeError(f"opusenc failed: {stderr_output}") from exc
+
+        return output_opus_path.read_bytes()
 
 
 async def fetch_voicevox_speakers(voicevox_engine_url: str) -> list[dict[str, Any]]:
@@ -313,7 +378,7 @@ class SynthesisManager:
 
             filename = None
             if audio_data:
-                filename = f"{record_id}.mp3"
+                filename = f"{record_id}.opus" if engine == "voicevox" else f"{record_id}.mp3"
                 (HISTORY_DIR / filename).write_bytes(audio_data)
 
             await self._update_history(
@@ -328,7 +393,7 @@ class SynthesisManager:
         except SynthesisStoppedError:
             filename = None
             if audio_data:
-                filename = f"{record_id}.mp3"
+                filename = f"{record_id}.opus" if engine == "voicevox" else f"{record_id}.mp3"
                 (HISTORY_DIR / filename).write_bytes(audio_data)
 
             await self._update_history(
@@ -389,7 +454,8 @@ async def history_audio_handler(request: web.Request) -> web.StreamResponse:
     if not audio_path.exists():
         raise web.HTTPNotFound(reason="Audio file not found")
 
-    return web.FileResponse(audio_path, headers={"Content-Type": "audio/mpeg"})
+    content_type = "audio/ogg" if audio_path.suffix.lower() == ".opus" else "audio/mpeg"
+    return web.FileResponse(audio_path, headers={"Content-Type": content_type})
 
 
 async def api_command_handler(request: web.Request) -> web.Response:

@@ -243,14 +243,14 @@
         return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
       }
 
-      function playHistoryAudio(recordId) {
+      function playHistoryAudio(recordId, audioFilename = "") {
         const audioUrl = `/api/history/${encodeURIComponent(recordId)}/audio`;
         audioPlayer.src = audioUrl;
         audioPlayer.play().catch(() => {
           // autoplay might be blocked by browser policy
         });
         downloadLink.href = audioUrl;
-        downloadLink.download = `${recordId}.mp3`;
+        downloadLink.download = audioFilename || `${recordId}.mp3`;
         downloadLink.style.display = "inline-block";
       }
 
@@ -270,7 +270,7 @@
             const canStop = record.status === "in_progress" || record.status === "stopping";
             const actionButtons = [
               canPlay
-                ? `<button type=\"button\" data-record-id=\"${escapeHtml(record.id || "")}\">Play</button>`
+                ? `<button type=\"button\" data-record-id=\"${escapeHtml(record.id || "")}\" data-audio-filename=\"${escapeHtml(record.audio_filename || "")}\">Play</button>`
                 : "",
               canStop
                 ? `<button type=\"button\" data-stop-record-id=\"${escapeHtml(record.id || "")}\">Stop</button>`
@@ -300,8 +300,9 @@
         historyList.querySelectorAll("button[data-record-id]").forEach((button) => {
           button.addEventListener("click", () => {
             const recordId = button.getAttribute("data-record-id");
+            const audioFilename = button.getAttribute("data-audio-filename") || "";
             if (!recordId) return;
-            playHistoryAudio(recordId);
+            playHistoryAudio(recordId, audioFilename);
           });
         });
 
@@ -350,7 +351,7 @@
           if (pendingPlaybackRecordId) {
             const pendingRecord = records.find((record) => record.id === pendingPlaybackRecordId);
             if (pendingRecord?.status === "completed" && pendingRecord.audio_filename) {
-              playHistoryAudio(pendingPlaybackRecordId);
+              playHistoryAudio(pendingPlaybackRecordId, pendingRecord.audio_filename);
               setStatus(`Synthesis completed (ID: ${pendingPlaybackRecordId}). Audio loaded to player.`);
               pendingPlaybackRecordId = null;
             } else if (["failed", "stopped"].includes(pendingRecord?.status || "")) {
