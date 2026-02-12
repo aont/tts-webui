@@ -702,20 +702,17 @@
         return /<\/?[a-z][\s\S]*>/i.test(input);
       }
 
-      function isLikelyMarkdown(input) {
-        return /(^|\n)(#{1,6}\s|[-*+]\s|\d+\.\s|>\s|```)|\[[^\]]+\]\([^)]+\)|\*\*[^*]+\*\*|_[^_]+_/m.test(input);
-      }
-
       function normalizeInputText(input) {
+        const rawInput = String(input || "").trim();
+        if (!rawInput) {
+          return "";
+        }
+
         if (isLikelyHtml(input)) {
-          return htmlToText(input);
+          return htmlToText(rawInput);
         }
 
-        if (isLikelyMarkdown(input)) {
-          return markdownToText(input);
-        }
-
-        return input.trim();
+        return markdownToText(rawInput);
       }
 
       function setStatus(message, isError = false) {
