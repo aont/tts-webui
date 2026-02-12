@@ -2,11 +2,12 @@ import argparse
 import asyncio
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from aiohttp import web
+from aiohttp import ClientError, ClientSession, web
 import edge_tts
 
 
@@ -16,6 +17,8 @@ MAX_SEGMENT_CHARS = 3000
 HISTORY_DIR = BASE_DIR / "data" / "history"
 HISTORY_FILE = HISTORY_DIR / "records.json"
 MAX_HISTORY_ITEMS = 30
+DEFAULT_ENGINE = "edge-tts"
+VOICEVOX_ENGINE_URL = os.getenv("VOICEVOX_ENGINE_URL", "http://127.0.0.1:50021")
 
 
 class SynthesisStoppedError(Exception):
@@ -141,6 +144,91 @@ async def synthesize_speech_iter(
     return b"".join(audio_chunks)
 
 
+async def synthesize_speech_voicevox(
+    text: str,
+    speaker: int,
+    stop_event: asyncio.Event,
+) -> bytes:
+    if stop_event.is_set():
+        raise SynthesisStoppedError("Synthesis stopped by user")
+
+    audio_chunks: list[bytes] = []
+
+    async with ClientSession() as session:
+        for text_segment in split_text_segments(text):
+            if stop_event.is_set():
+                raise SynthesisStoppedError("Synthesis stopped by user")
+
+            query_url = f"{VOICEVOX_ENGINE_URL}/audio_query"
+            synth_url = f"{VOICEVOX_ENGINE_URL}/synthesis"
+
+            async with session.post(
+                query_url,
+                params={"text": text_segment, "speaker": speaker},
+            ) as query_response:
+                if query_response.status >= 400:
+                    error_body = await query_response.text()
+                    raise RuntimeError(
+                        f"VoiceVox audio_query failed ({query_response.status}): {error_body}"
+                    )
+                audio_query = await query_response.json()
+
+            async with session.post(
+                synth_url,
+                params={"speaker": speaker},
+                json=audio_query,
+            ) as synth_response:
+                if synth_response.status >= 400:
+                    error_body = await synth_response.text()
+                    raise RuntimeError(
+                        f"VoiceVox synthesis failed ({synth_response.status}): {error_body}"
+                    )
+                audio_chunks.append(await synth_response.read())
+
+    return b"".join(audio_chunks)
+
+
+async def fetch_voicevox_speakers() -> list[dict[str, Any]]:
+    speakers_url = f"{VOICEVOX_ENGINE_URL}/speakers"
+    try:
+        async with ClientSession() as session:
+            async with session.get(speakers_url) as response:
+                if response.status >= 400:
+                    error_body = await response.text()
+                    raise web.HTTPBadGateway(
+                        reason=f"VoiceVox speakers request failed ({response.status}): {error_body}"
+                    )
+                payload = await response.json()
+    except ClientError as exc:
+        raise web.HTTPBadGateway(reason=f"VoiceVox is unavailable: {exc}") from exc
+
+    if not isinstance(payload, list):
+        raise web.HTTPBadGateway(reason="VoiceVox speakers response was not a list")
+
+    speaker_items: list[dict[str, Any]] = []
+    for speaker in payload:
+        if not isinstance(speaker, dict):
+            continue
+        styles = speaker.get("styles") or []
+        if not isinstance(styles, list) or not styles:
+            continue
+        first_style = styles[0]
+        if not isinstance(first_style, dict):
+            continue
+        style_id = first_style.get("id")
+        if not isinstance(style_id, int):
+            continue
+
+        speaker_items.append(
+            {
+                "name": speaker.get("name") or "Unknown",
+                "speaker_id": style_id,
+            }
+        )
+
+    return speaker_items
+
+
 class SynthesisManager:
     def __init__(self) -> None:
         self._tasks: dict[str, asyncio.Task[None]] = {}
@@ -163,7 +251,7 @@ class SynthesisManager:
             save_history_records(trim_history(records))
         return payload
 
-    async def start(self, text: str, voice: str, rate: str, pitch: str) -> dict[str, Any]:
+    async def start(self, text: str, voice: str, rate: str, pitch: str, engine: str) -> dict[str, Any]:
         record_id = uuid4().hex
         stop_event = asyncio.Event()
         self._stop_events[record_id] = stop_event
@@ -173,6 +261,7 @@ class SynthesisManager:
             "created_at": now_iso(),
             "updated_at": now_iso(),
             "text": text,
+            "engine": engine,
             "voice": voice,
             "rate": rate,
             "pitch": pitch,
@@ -189,6 +278,7 @@ class SynthesisManager:
                 voice=voice,
                 rate=rate,
                 pitch=pitch,
+                engine=engine,
                 stop_event=stop_event,
             )
         )
@@ -201,11 +291,19 @@ class SynthesisManager:
         voice: str,
         rate: str,
         pitch: str,
+        engine: str,
         stop_event: asyncio.Event,
     ) -> None:
         audio_data = b""
         try:
-            audio_data = await synthesize_speech_iter(text, voice, rate, pitch, stop_event)
+            if engine == "voicevox":
+                try:
+                    speaker_id = int(voice)
+                except ValueError as exc:
+                    raise RuntimeError("voice must be a valid VoiceVox speaker id") from exc
+                audio_data = await synthesize_speech_voicevox(text, speaker_id, stop_event)
+            else:
+                audio_data = await synthesize_speech_iter(text, voice, rate, pitch, stop_event)
 
             filename = None
             if audio_data:
@@ -302,6 +400,7 @@ async def api_command_handler(request: web.Request) -> web.Response:
 
     if action == "synthesize":
         text = (payload.get("text") or "").strip()
+        engine = (payload.get("engine") or DEFAULT_ENGINE).strip()
         voice = payload.get("voice") or "en-US-JennyNeural"
         rate = payload.get("rate") or "+0%"
         pitch = payload.get("pitch") or "+0Hz"
@@ -309,8 +408,17 @@ async def api_command_handler(request: web.Request) -> web.Response:
         if not text:
             raise web.HTTPBadRequest(reason="Text is required")
 
-        record = await manager.start(text=text, voice=voice, rate=rate, pitch=pitch)
+        if engine not in {"edge-tts", "voicevox"}:
+            raise web.HTTPBadRequest(reason="Unsupported engine")
+
+        if engine == "voicevox" and not str(voice).strip():
+            raise web.HTTPBadRequest(reason="voice is required for voicevox")
+
+        record = await manager.start(text=text, voice=str(voice), rate=rate, pitch=pitch, engine=engine)
         return web.json_response({"item": record}, status=202)
+
+    if action == "voicevox_speakers":
+        return web.json_response({"items": await fetch_voicevox_speakers()})
 
     if action == "stop":
         record_id = (payload.get("record_id") or "").strip()

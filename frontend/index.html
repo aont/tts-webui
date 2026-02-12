@@ -97,15 +97,22 @@
     </style>
   </head>
   <body>
-    <h1>Edge TTS HTTP Demo</h1>
+    <h1>Speech Synthesis HTTP Demo</h1>
     <p>
-      Enter text and synthesize speech using <code>edge-tts</code>. Communication between frontend and backend happens via
+      Enter text and synthesize speech using <code>edge-tts</code> or <code>voicevox</code>. Communication between frontend and backend happens via
       HTTP (GET/POST).
     </p>
 
     <textarea id="textInput" placeholder="Type text to synthesize..."></textarea>
 
     <div class="actions controls">
+      <div class="control-group">
+        <label for="engineSelect">Engine:</label>
+        <select id="engineSelect">
+          <option value="edge-tts">edge-tts</option>
+          <option value="voicevox">voicevox</option>
+        </select>
+      </div>
       <div class="control-group">
         <label for="voiceSelect">Voice:</label>
         <select id="voiceSelect">
@@ -140,6 +147,7 @@
     <script>
       const statusEl = document.getElementById("status");
       const textInput = document.getElementById("textInput");
+      const engineSelect = document.getElementById("engineSelect");
       const voiceSelect = document.getElementById("voiceSelect");
       const rateInput = document.getElementById("rateInput");
       const pitchInput = document.getElementById("pitchInput");
@@ -151,6 +159,7 @@
 
       const STORAGE_KEYS = {
         text: "edgeTtsWebUi.text",
+        engine: "edgeTtsWebUi.engine",
         voice: "edgeTtsWebUi.voice",
         rate: "edgeTtsWebUi.rate",
         pitch: "edgeTtsWebUi.pitch",
@@ -158,6 +167,68 @@
 
       let historyPollTimer;
       let pendingPlaybackRecordId = null;
+
+      const EDGE_TTS_VOICES = [
+        "en-US-JennyNeural",
+        "en-US-GuyNeural",
+        "en-GB-SoniaNeural",
+        "ja-JP-NanamiNeural",
+      ];
+      let voicevoxSpeakers = [];
+
+      function fillVoiceOptions(options, selected) {
+        voiceSelect.innerHTML = options
+          .map((option) => `<option value="${escapeHtml(String(option.value))}">${escapeHtml(option.label)}</option>`)
+          .join("");
+
+        if (selected !== null && selected !== undefined) {
+          voiceSelect.value = String(selected);
+        }
+
+        if (!voiceSelect.value && options.length > 0) {
+          voiceSelect.value = String(options[0].value);
+        }
+      }
+
+      function updateVoiceOptions() {
+        if (engineSelect.value === "voicevox") {
+          const options = voicevoxSpeakers.map((speaker) => ({
+            value: speaker.speaker_id,
+            label: speaker.name,
+          }));
+          fillVoiceOptions(options, localStorage.getItem(STORAGE_KEYS.voice));
+          rateInput.disabled = true;
+          pitchInput.disabled = true;
+          return;
+        }
+
+        fillVoiceOptions(
+          EDGE_TTS_VOICES.map((voice) => ({ value: voice, label: voice })),
+          localStorage.getItem(STORAGE_KEYS.voice),
+        );
+        rateInput.disabled = false;
+        pitchInput.disabled = false;
+      }
+
+      async function loadVoicevoxSpeakers() {
+        try {
+          const response = await fetch("/api/command", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "voicevox_speakers" }),
+          });
+
+          if (!response.ok) {
+            throw new Error(`VoiceVox speakers request failed: ${response.status}`);
+          }
+
+          const payload = await response.json();
+          voicevoxSpeakers = Array.isArray(payload.items) ? payload.items : [];
+        } catch (error) {
+          voicevoxSpeakers = [];
+          setStatus(`Failed to load VoiceVox speakers: ${String(error)}`, true);
+        }
+      }
 
       function escapeHtml(value) {
         return value
@@ -213,6 +284,7 @@
                 <div class=\"history-item-main\">
                   <div class=\"history-meta\">
                     <strong>${escapeHtml(record.voice || "unknown")}</strong>
+                    <div>Engine: ${escapeHtml(record.engine || "edge-tts")}</div>
                     <div>${escapeHtml(record.rate || "")}, ${escapeHtml(record.pitch || "")}</div>
                     <div>${escapeHtml(createdAtLabel)}</div>
                     <div>Status: <strong>${status}</strong></div>
@@ -332,6 +404,7 @@
 
       function saveInputsToStorage() {
         localStorage.setItem(STORAGE_KEYS.text, textInput.value);
+        localStorage.setItem(STORAGE_KEYS.engine, engineSelect.value);
         localStorage.setItem(STORAGE_KEYS.voice, voiceSelect.value);
         localStorage.setItem(STORAGE_KEYS.rate, rateInput.value);
         localStorage.setItem(STORAGE_KEYS.pitch, pitchInput.value);
@@ -339,12 +412,17 @@
 
       function restoreInputsFromStorage() {
         const savedText = localStorage.getItem(STORAGE_KEYS.text);
+        const savedEngine = localStorage.getItem(STORAGE_KEYS.engine);
         const savedVoice = localStorage.getItem(STORAGE_KEYS.voice);
         const savedRate = localStorage.getItem(STORAGE_KEYS.rate);
         const savedPitch = localStorage.getItem(STORAGE_KEYS.pitch);
 
         if (savedText !== null) {
           textInput.value = savedText;
+        }
+
+        if (savedEngine !== null) {
+          engineSelect.value = savedEngine;
         }
 
         if (savedVoice !== null) {
@@ -377,6 +455,7 @@
             body: JSON.stringify({
               action: "synthesize",
               text,
+              engine: engineSelect.value,
               voice: voiceSelect.value,
               rate: rateInput.value.trim() || "+0%",
               pitch: pitchInput.value.trim() || "+0Hz",
@@ -400,13 +479,21 @@
       });
 
       textInput.addEventListener("input", saveInputsToStorage);
+      engineSelect.addEventListener("change", () => {
+        updateVoiceOptions();
+        saveInputsToStorage();
+      });
       voiceSelect.addEventListener("change", saveInputsToStorage);
       rateInput.addEventListener("input", saveInputsToStorage);
       pitchInput.addEventListener("input", saveInputsToStorage);
       refreshHistoryBtn.addEventListener("click", loadHistory);
 
-      restoreInputsFromStorage();
-      loadHistory();
+      (async () => {
+        await loadVoicevoxSpeakers();
+        restoreInputsFromStorage();
+        updateVoiceOptions();
+        loadHistory();
+      })();
 
       historyPollTimer = setInterval(loadHistory, 4000);
       window.addEventListener("beforeunload", () => {
