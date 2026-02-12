@@ -30,12 +30,13 @@ Open: <http://localhost:8080>
 ## CLI options
 
 ```bash
-python app.py --host 0.0.0.0 --port 9000
+python app.py --host 0.0.0.0 --port 9000 --voicevox-engine-url http://127.0.0.1:50021
 ```
 
 - `--host`: host/interface to bind (default `0.0.0.0`)
 - `--port`: port to bind (default `8080`)
 - `--no-frontend`: do not serve `/` and `/frontend/*`; only backend endpoints are available
+- `--voicevox-engine-url`: VoiceVox engine base URL (default `http://127.0.0.1:50021`)
 
 ## API
 

@@ -2,7 +2,6 @@ import argparse
 import asyncio
 from datetime import datetime, timezone
 import json
-import os
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -18,7 +17,7 @@ HISTORY_DIR = BASE_DIR / "data" / "history"
 HISTORY_FILE = HISTORY_DIR / "records.json"
 MAX_HISTORY_ITEMS = 30
 DEFAULT_ENGINE = "edge-tts"
-VOICEVOX_ENGINE_URL = os.getenv("VOICEVOX_ENGINE_URL", "http://127.0.0.1:50021")
+DEFAULT_VOICEVOX_ENGINE_URL = "http://127.0.0.1:50021"
 
 
 class SynthesisStoppedError(Exception):
@@ -147,6 +146,7 @@ async def synthesize_speech_iter(
 async def synthesize_speech_voicevox(
     text: str,
     speaker: int,
+    voicevox_engine_url: str,
     stop_event: asyncio.Event,
 ) -> bytes:
     if stop_event.is_set():
@@ -159,8 +159,8 @@ async def synthesize_speech_voicevox(
             if stop_event.is_set():
                 raise SynthesisStoppedError("Synthesis stopped by user")
 
-            query_url = f"{VOICEVOX_ENGINE_URL}/audio_query"
-            synth_url = f"{VOICEVOX_ENGINE_URL}/synthesis"
+            query_url = f"{voicevox_engine_url}/audio_query"
+            synth_url = f"{voicevox_engine_url}/synthesis"
 
             async with session.post(
                 query_url,
@@ -188,8 +188,8 @@ async def synthesize_speech_voicevox(
     return b"".join(audio_chunks)
 
 
-async def fetch_voicevox_speakers() -> list[dict[str, Any]]:
-    speakers_url = f"{VOICEVOX_ENGINE_URL}/speakers"
+async def fetch_voicevox_speakers(voicevox_engine_url: str) -> list[dict[str, Any]]:
+    speakers_url = f"{voicevox_engine_url}/speakers"
     try:
         async with ClientSession() as session:
             async with session.get(speakers_url) as response:
@@ -230,10 +230,11 @@ async def fetch_voicevox_speakers() -> list[dict[str, Any]]:
 
 
 class SynthesisManager:
-    def __init__(self) -> None:
+    def __init__(self, voicevox_engine_url: str) -> None:
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._stop_events: dict[str, asyncio.Event] = {}
         self._history_lock = asyncio.Lock()
+        self._voicevox_engine_url = voicevox_engine_url
 
     async def _update_history(self, record_id: str, updates: dict[str, Any]) -> None:
         async with self._history_lock:
@@ -301,7 +302,12 @@ class SynthesisManager:
                     speaker_id = int(voice)
                 except ValueError as exc:
                     raise RuntimeError("voice must be a valid VoiceVox speaker id") from exc
-                audio_data = await synthesize_speech_voicevox(text, speaker_id, stop_event)
+                audio_data = await synthesize_speech_voicevox(
+                    text,
+                    speaker_id,
+                    self._voicevox_engine_url,
+                    stop_event,
+                )
             else:
                 audio_data = await synthesize_speech_iter(text, voice, rate, pitch, stop_event)
 
@@ -388,6 +394,7 @@ async def history_audio_handler(request: web.Request) -> web.StreamResponse:
 
 async def api_command_handler(request: web.Request) -> web.Response:
     manager: SynthesisManager = request.app["synthesis_manager"]
+    voicevox_engine_url = request.app["voicevox_engine_url"]
 
     try:
         payload = await request.json()
@@ -418,7 +425,7 @@ async def api_command_handler(request: web.Request) -> web.Response:
         return web.json_response({"item": record}, status=202)
 
     if action == "voicevox_speakers":
-        return web.json_response({"items": await fetch_voicevox_speakers()})
+        return web.json_response({"items": await fetch_voicevox_speakers(voicevox_engine_url)})
 
     if action == "stop":
         record_id = (payload.get("record_id") or "").strip()
@@ -436,9 +443,10 @@ async def api_command_handler(request: web.Request) -> web.Response:
     raise web.HTTPBadRequest(reason="Unsupported action")
 
 
-def create_app(serve_frontend: bool = True) -> web.Application:
+def create_app(voicevox_engine_url: str, serve_frontend: bool = True) -> web.Application:
     app = web.Application()
-    app["synthesis_manager"] = SynthesisManager()
+    app["synthesis_manager"] = SynthesisManager(voicevox_engine_url=voicevox_engine_url)
+    app["voicevox_engine_url"] = voicevox_engine_url
 
     if serve_frontend:
         app.router.add_get("/", index_handler)
@@ -468,13 +476,21 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Disable serving frontend files from this process",
     )
+    parser.add_argument(
+        "--voicevox-engine-url",
+        default=DEFAULT_VOICEVOX_ENGINE_URL,
+        help=f"VoiceVox engine base URL (default: {DEFAULT_VOICEVOX_ENGINE_URL})",
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
     web.run_app(
-        create_app(serve_frontend=not args.no_frontend),
+        create_app(
+            voicevox_engine_url=args.voicevox_engine_url,
+            serve_frontend=not args.no_frontend,
+        ),
         host=args.host,
         port=args.port,
     )
