@@ -33,6 +33,24 @@ class SynthesisStoppedError(Exception):
     pass
 
 
+@web.middleware
+async def cors_middleware(request: web.Request, handler):
+    allow_origin = request.app["allow_origin"]
+    allow_headers = "Content-Type"
+    allow_methods = "GET,POST,OPTIONS"
+
+    if request.method == "OPTIONS":
+        response = web.Response(status=204)
+    else:
+        response = await handler(request)
+
+    response.headers["Access-Control-Allow-Origin"] = allow_origin
+    response.headers["Access-Control-Allow-Methods"] = allow_methods
+    response.headers["Access-Control-Allow-Headers"] = allow_headers
+    response.headers["Access-Control-Max-Age"] = "600"
+    return response
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -619,11 +637,12 @@ async def api_command_handler(request: web.Request) -> web.Response:
     raise web.HTTPBadRequest(reason="Unsupported action")
 
 
-def create_app(voicevox_engine_url: str, serve_frontend: bool = True) -> web.Application:
-    logger.debug("Creating app (serve_frontend=%s, voicevox_engine_url=%s)", serve_frontend, voicevox_engine_url)
-    app = web.Application()
+def create_app(voicevox_engine_url: str, allow_origin: str, serve_frontend: bool = True) -> web.Application:
+    logger.debug("Creating app (serve_frontend=%s, voicevox_engine_url=%s, allow_origin=%s)", serve_frontend, voicevox_engine_url, allow_origin)
+    app = web.Application(middlewares=[cors_middleware])
     app["synthesis_manager"] = SynthesisManager(voicevox_engine_url=voicevox_engine_url)
     app["voicevox_engine_url"] = voicevox_engine_url
+    app["allow_origin"] = allow_origin
 
     if serve_frontend:
         app.router.add_get("/", index_handler)
@@ -631,7 +650,9 @@ def create_app(voicevox_engine_url: str, serve_frontend: bool = True) -> web.App
 
     app.router.add_get("/health", health_handler)
     app.router.add_post("/api/command", api_command_handler)
+    app.router.add_route("OPTIONS", "/api/command", api_command_handler)
     app.router.add_get("/api/history/{record_id}/audio", history_audio_handler)
+    app.router.add_route("OPTIONS", "/api/history/{record_id}/audio", history_audio_handler)
     return app
 
 
@@ -663,6 +684,11 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_VOICEVOX_ENGINE_URL,
         help=f"VoiceVox engine base URL (default: {DEFAULT_VOICEVOX_ENGINE_URL})",
     )
+    parser.add_argument(
+        "--allow-origin",
+        default="*",
+        help="CORS Access-Control-Allow-Origin value (default: *)",
+    )
     return parser.parse_args()
 
 
@@ -676,6 +702,7 @@ if __name__ == "__main__":
     web.run_app(
         create_app(
             voicevox_engine_url=args.voicevox_engine_url,
+            allow_origin=args.allow_origin,
             serve_frontend=not args.no_frontend,
         ),
         host=args.host,

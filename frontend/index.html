@@ -37,6 +37,13 @@
         align-items: center;
         gap: 0.4rem;
       }
+      .control-group.endpoint-group {
+        min-width: min(420px, 100%);
+        flex: 1 1 340px;
+      }
+      .control-group.endpoint-group input {
+        width: 100%;
+      }
       .control-group input {
         width: 7rem;
       }
@@ -163,6 +170,10 @@
     </section>
 
     <div class="actions controls">
+      <div class="control-group endpoint-group">
+        <label for="endpointInput">API Endpoint:</label>
+        <input id="endpointInput" type="text" placeholder="e.g. http://127.0.0.1:8080" />
+      </div>
       <div class="control-group">
         <label for="engineSelect">Engine:</label>
         <select id="engineSelect">
@@ -208,6 +219,7 @@
     <script>
       const statusEl = document.getElementById("status");
       const textInput = document.getElementById("textInput");
+      const endpointInput = document.getElementById("endpointInput");
       const engineSelect = document.getElementById("engineSelect");
       const voiceSelect = document.getElementById("voiceSelect");
       const voicevoxStyleGroup = document.getElementById("voicevoxStyleGroup");
@@ -229,6 +241,7 @@
 
       const STORAGE_KEYS = {
         text: "edgeTtsWebUi.text",
+        endpoint: "edgeTtsWebUi.endpoint",
         engine: "edgeTtsWebUi.engine",
         voice: "edgeTtsWebUi.voice",
         rate: "edgeTtsWebUi.rate",
@@ -261,6 +274,31 @@
       ];
       let voicevoxSpeakers = [];
       let voicevoxStyles = [];
+
+      function getDefaultEndpoint() {
+        if (window.location.protocol.startsWith("http")) {
+          return window.location.origin;
+        }
+        return "http://127.0.0.1:8080";
+      }
+
+      function normalizeEndpointUrl(rawValue) {
+        const value = String(rawValue || "").trim();
+        if (!value) {
+          return getDefaultEndpoint();
+        }
+
+        try {
+          return new URL(value).origin;
+        } catch {
+          throw new Error("Invalid endpoint URL. Include protocol, e.g. http://127.0.0.1:8080");
+        }
+      }
+
+      function getApiUrl(path) {
+        const endpoint = normalizeEndpointUrl(endpointInput.value);
+        return `${endpoint}${path}`;
+      }
 
       function fillVoiceOptions(options, selected) {
         debugLog("Filling voice options", { count: options.length, selected });
@@ -326,7 +364,7 @@
       async function loadVoicevoxSpeakers() {
         debugLog("Loading VoiceVox speakers");
         try {
-          const response = await fetch("/api/command", {
+          const response = await fetch(getApiUrl("/api/command"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ action: "voicevox_speakers" }),
@@ -509,7 +547,7 @@
 
       function playHistoryAudio(recordId, audioFilename = "") {
         debugLog("Playing history audio", { recordId, audioFilename });
-        const audioUrl = `/api/history/${encodeURIComponent(recordId)}/audio`;
+        const audioUrl = getApiUrl(`/api/history/${encodeURIComponent(recordId)}/audio`);
         audioPlayer.src = audioUrl;
         audioPlayer.play().catch(() => {
           // autoplay might be blocked by browser policy
@@ -579,7 +617,7 @@
             if (!recordId) return;
 
             try {
-              const response = await fetch(`/api/command`, {
+              const response = await fetch(getApiUrl("/api/command"), {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -632,7 +670,7 @@
       async function loadHistory() {
         debugLog("Loading history");
         try {
-          const response = await fetch("/api/command", {
+          const response = await fetch(getApiUrl("/api/command"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ action: "history_list" }),
@@ -704,6 +742,7 @@
 
       function saveInputsToStorage() {
         localStorage.setItem(STORAGE_KEYS.text, textInput.value);
+        localStorage.setItem(STORAGE_KEYS.endpoint, endpointInput.value.trim());
         localStorage.setItem(STORAGE_KEYS.engine, engineSelect.value);
         localStorage.setItem(STORAGE_KEYS.voice, voiceSelect.value);
         localStorage.setItem(STORAGE_KEYS.rate, rateInput.value);
@@ -713,6 +752,7 @@
 
       function restoreInputsFromStorage() {
         const savedText = localStorage.getItem(STORAGE_KEYS.text);
+        const savedEndpoint = localStorage.getItem(STORAGE_KEYS.endpoint);
         const savedEngine = localStorage.getItem(STORAGE_KEYS.engine);
         const savedVoice = localStorage.getItem(STORAGE_KEYS.voice);
         const savedRate = localStorage.getItem(STORAGE_KEYS.rate);
@@ -723,6 +763,8 @@
         if (savedText !== null) {
           textInput.value = savedText;
         }
+
+        endpointInput.value = savedEndpoint !== null ? savedEndpoint : getDefaultEndpoint();
 
         if (savedEngine !== null) {
           engineSelect.value = savedEngine;
@@ -761,7 +803,7 @@
         setStatus("Starting background synthesis...");
 
         try {
-          const response = await fetch("/api/command", {
+          const response = await fetch(getApiUrl("/api/command"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -798,6 +840,18 @@
 
       textInput.addEventListener("input", saveInputsToStorage);
       textInput.addEventListener("input", rebuildSegmentsFromInput);
+      endpointInput.addEventListener("change", async () => {
+        try {
+          endpointInput.value = normalizeEndpointUrl(endpointInput.value);
+          saveInputsToStorage();
+          setStatus("API endpoint updated.");
+          await loadVoicevoxSpeakers();
+          updateVoiceOptions();
+          loadHistory();
+        } catch (error) {
+          setStatus(String(error), true);
+        }
+      });
       engineSelect.addEventListener("change", () => {
         updateVoiceOptions();
         saveInputsToStorage();
