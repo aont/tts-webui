@@ -132,8 +132,36 @@ def split_text_segments(text: str, max_chars: int = MAX_SEGMENT_CHARS) -> list[s
     return segments
 
 
+def normalize_segments_payload(raw_segments: Any, fallback_text: str) -> list[str]:
+    if not isinstance(raw_segments, list):
+        return split_text_segments(fallback_text)
+
+    segments: list[str] = []
+    for raw_segment in raw_segments:
+        if not isinstance(raw_segment, str):
+            continue
+        segment = raw_segment.strip()
+        if not segment:
+            continue
+        if len(segment) > MAX_SEGMENT_CHARS:
+            raise web.HTTPBadRequest(
+                reason=f"Each segment must be <= {MAX_SEGMENT_CHARS} characters"
+            )
+        segments.append(segment)
+
+    if not segments:
+        return split_text_segments(fallback_text)
+
+    logger.debug(
+        "Accepted %d segment(s) from request payload (chars=%d)",
+        len(segments),
+        sum(len(segment) for segment in segments),
+    )
+    return segments
+
+
 async def synthesize_speech_iter(
-    text: str,
+    segments: list[str],
     voice: str,
     rate: str,
     pitch: str,
@@ -145,10 +173,10 @@ async def synthesize_speech_iter(
         voice,
         rate,
         pitch,
-        len(text),
+        sum(len(segment) for segment in segments),
     )
 
-    for index, text_segment in enumerate(split_text_segments(text), start=1):
+    for index, text_segment in enumerate(segments, start=1):
         if stop_event.is_set():
             raise SynthesisStoppedError("Synthesis stopped by user")
 
@@ -172,7 +200,7 @@ async def synthesize_speech_iter(
 
 
 async def synthesize_speech_voicevox(
-    text: str,
+    segments: list[str],
     speaker: int,
     voicevox_engine_url: str,
     stop_event: asyncio.Event,
@@ -184,12 +212,12 @@ async def synthesize_speech_voicevox(
     logger.debug(
         "Starting VoiceVox synthesis (speaker=%s, text_len=%d, engine_url=%s)",
         speaker,
-        len(text),
+        sum(len(segment) for segment in segments),
         voicevox_engine_url,
     )
 
     async with ClientSession() as session:
-        for index, text_segment in enumerate(split_text_segments(text), start=1):
+        for index, text_segment in enumerate(segments, start=1):
             if stop_event.is_set():
                 raise SynthesisStoppedError("Synthesis stopped by user")
 
@@ -370,7 +398,15 @@ class SynthesisManager:
             save_history_records(trim_history(records))
         return payload
 
-    async def start(self, text: str, voice: str, rate: str, pitch: str, engine: str) -> dict[str, Any]:
+    async def start(
+        self,
+        text: str,
+        segments: list[str],
+        voice: str,
+        rate: str,
+        pitch: str,
+        engine: str,
+    ) -> dict[str, Any]:
         record_id = uuid4().hex
         stop_event = asyncio.Event()
         self._stop_events[record_id] = stop_event
@@ -400,7 +436,7 @@ class SynthesisManager:
         self._tasks[record_id] = asyncio.create_task(
             self._run_synthesis(
                 record_id=record_id,
-                text=text,
+                segments=segments,
                 voice=voice,
                 rate=rate,
                 pitch=pitch,
@@ -413,7 +449,7 @@ class SynthesisManager:
     async def _run_synthesis(
         self,
         record_id: str,
-        text: str,
+        segments: list[str],
         voice: str,
         rate: str,
         pitch: str,
@@ -429,13 +465,13 @@ class SynthesisManager:
                 except ValueError as exc:
                     raise RuntimeError("voice must be a valid VoiceVox speaker id") from exc
                 audio_data = await synthesize_speech_voicevox(
-                    text,
+                    segments,
                     speaker_id,
                     self._voicevox_engine_url,
                     stop_event,
                 )
             else:
-                audio_data = await synthesize_speech_iter(text, voice, rate, pitch, stop_event)
+                audio_data = await synthesize_speech_iter(segments, voice, rate, pitch, stop_event)
 
             filename = None
             if audio_data:
@@ -539,6 +575,7 @@ async def api_command_handler(request: web.Request) -> web.Response:
 
     if action == "synthesize":
         text = (payload.get("text") or "").strip()
+        segments = normalize_segments_payload(payload.get("segments"), text)
         engine = (payload.get("engine") or DEFAULT_ENGINE).strip()
         voice = payload.get("voice") or "en-US-JennyNeural"
         rate = payload.get("rate") or "+0%"
@@ -553,7 +590,14 @@ async def api_command_handler(request: web.Request) -> web.Response:
         if engine == "voicevox" and not str(voice).strip():
             raise web.HTTPBadRequest(reason="voice is required for voicevox")
 
-        record = await manager.start(text=text, voice=str(voice), rate=rate, pitch=pitch, engine=engine)
+        record = await manager.start(
+            text=text,
+            segments=segments,
+            voice=str(voice),
+            rate=rate,
+            pitch=pitch,
+            engine=engine,
+        )
         return web.json_response({"item": record}, status=202)
 
     if action == "voicevox_speakers":

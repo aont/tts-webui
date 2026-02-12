@@ -94,6 +94,36 @@
       audio {
         width: 100%;
       }
+      .segment-panel {
+        border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+        border-radius: 8px;
+        padding: 0.8rem;
+        margin-bottom: 1rem;
+      }
+      .segment-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 0.6rem;
+      }
+      .segment-list {
+        list-style: none;
+        margin: 0.8rem 0 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+      }
+      .segment-item {
+        border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+        border-radius: 6px;
+        padding: 0.5rem;
+      }
+      .segment-item p {
+        margin: 0.3rem 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
     </style>
   </head>
   <body>
@@ -104,6 +134,14 @@
     </p>
 
     <textarea id="textInput" placeholder="Type text to synthesize..."></textarea>
+
+    <section class="segment-panel">
+      <div class="segment-header">
+        <strong>Segments (max 3000 chars each)</strong>
+        <button id="rebuildSegmentsBtn" type="button">Rebuild</button>
+      </div>
+      <ul id="segmentList" class="segment-list"></ul>
+    </section>
 
     <div class="actions controls">
       <div class="control-group">
@@ -162,6 +200,11 @@
       const downloadLink = document.getElementById("downloadLink");
       const historyList = document.getElementById("historyList");
       const refreshHistoryBtn = document.getElementById("refreshHistoryBtn");
+      const rebuildSegmentsBtn = document.getElementById("rebuildSegmentsBtn");
+      const segmentList = document.getElementById("segmentList");
+      const MAX_SEGMENT_CHARS = 3000;
+      const SENTENCE_END_CHARS = new Set(["。", "．", ".", "!", "?", "！", "？", "\n"]);
+      const TRAILING_CLOSERS = /^[\s\"'\)\]\}」』】》〉》）】”’]+$/;
 
       const STORAGE_KEYS = {
         text: "edgeTtsWebUi.text",
@@ -174,6 +217,11 @@
 
       let historyPollTimer;
       let pendingPlaybackRecordId = null;
+      let segmentState = {
+        text: "",
+        boundaries: [],
+        candidates: [],
+      };
 
       function debugLog(message, details) {
         if (details === undefined) {
@@ -287,6 +335,133 @@
 
       function truncateText(value, maxLength = 220) {
         return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
+      }
+
+      function collectSentenceCandidates(text) {
+        const candidates = new Set();
+        for (let i = 0; i < text.length; i += 1) {
+          const char = text[i];
+          if (!SENTENCE_END_CHARS.has(char)) {
+            continue;
+          }
+
+          let end = i + 1;
+          while (end < text.length && TRAILING_CLOSERS.test(text[end])) {
+            end += 1;
+          }
+          candidates.add(end);
+        }
+        candidates.add(text.length);
+        return [...candidates].filter((point) => point > 0).sort((a, b) => a - b);
+      }
+
+      function buildSegmentBoundaries(text, maxChars = MAX_SEGMENT_CHARS) {
+        if (!text) {
+          return { boundaries: [], candidates: [] };
+        }
+
+        const candidates = collectSentenceCandidates(text);
+        const boundaries = [];
+        let start = 0;
+
+        while (start < text.length) {
+          const maxEnd = Math.min(start + maxChars, text.length);
+          let selected = -1;
+
+          for (const point of candidates) {
+            if (point <= start || point > maxEnd) {
+              continue;
+            }
+            selected = point;
+          }
+
+          if (selected === -1) {
+            selected = maxEnd;
+          }
+
+          boundaries.push(selected);
+          start = selected;
+        }
+
+        return { boundaries, candidates };
+      }
+
+      function getCurrentSegments() {
+        const segments = [];
+        let start = 0;
+        for (const end of segmentState.boundaries) {
+          const segment = segmentState.text.slice(start, end).trim();
+          if (segment) {
+            segments.push(segment);
+          }
+          start = end;
+        }
+        return segments;
+      }
+
+      function moveBoundary(index, direction) {
+        if (index < 0 || index >= segmentState.boundaries.length - 1) {
+          return;
+        }
+
+        const previousEdge = index === 0 ? 0 : segmentState.boundaries[index - 1];
+        const currentEdge = segmentState.boundaries[index];
+        const nextEdge = segmentState.boundaries[index + 1];
+
+        const options = segmentState.candidates.filter((point) => {
+          if (point <= previousEdge || point >= nextEdge || point === currentEdge) {
+            return false;
+          }
+          return point - previousEdge <= MAX_SEGMENT_CHARS && nextEdge - point <= MAX_SEGMENT_CHARS;
+        });
+
+        if (!options.length) {
+          return;
+        }
+
+        const sorted = options.sort((a, b) => a - b);
+        const target = direction === "backward"
+          ? sorted.filter((value) => value < currentEdge).at(-1)
+          : sorted.find((value) => value > currentEdge);
+
+        if (!target) {
+          return;
+        }
+
+        segmentState.boundaries[index] = target;
+        renderSegments();
+      }
+
+      function renderSegments() {
+        const segments = getCurrentSegments();
+        if (!segments.length) {
+          segmentList.innerHTML = "<li class=\"segment-item\">No text.</li>";
+          return;
+        }
+
+        segmentList.innerHTML = segments
+          .map((segment, index) => {
+            const moveButtons = index < segments.length - 1
+              ? `<div class=\"actions\"><button type=\"button\" data-move-boundary=\"${index}\" data-direction=\"backward\">← Move split earlier</button><button type=\"button\" data-move-boundary=\"${index}\" data-direction=\"forward\">Move split later →</button></div>`
+              : "";
+            return `<li class=\"segment-item\"><strong>Segment ${index + 1} (${segment.length} chars)</strong><p>${escapeHtml(segment)}</p>${moveButtons}</li>`;
+          })
+          .join("");
+
+        segmentList.querySelectorAll("button[data-move-boundary]").forEach((button) => {
+          button.addEventListener("click", () => {
+            const index = Number.parseInt(button.getAttribute("data-move-boundary") || "-1", 10);
+            const direction = button.getAttribute("data-direction") || "forward";
+            moveBoundary(index, direction);
+          });
+        });
+      }
+
+      function rebuildSegmentsFromInput() {
+        const text = normalizeInputText(textInput.value);
+        const { boundaries, candidates } = buildSegmentBoundaries(text);
+        segmentState = { text, boundaries, candidates };
+        renderSegments();
       }
 
       function playHistoryAudio(recordId, audioFilename = "") {
@@ -529,6 +704,7 @@
       synthesizeBtn.addEventListener("click", async () => {
         debugLog("Synthesize button clicked");
         const text = normalizeInputText(textInput.value);
+        rebuildSegmentsFromInput();
         if (!text) {
           setStatus("Please enter text first.", true);
           return;
@@ -543,6 +719,7 @@
             body: JSON.stringify({
               action: "synthesize",
               text,
+              segments: getCurrentSegments(),
               engine: engineSelect.value,
               voice: engineSelect.value === "voicevox" ? voicevoxStyleSelect.value : voiceSelect.value,
               style: engineSelect.value === "voicevox"
@@ -572,6 +749,7 @@
       });
 
       textInput.addEventListener("input", saveInputsToStorage);
+      textInput.addEventListener("input", rebuildSegmentsFromInput);
       engineSelect.addEventListener("change", () => {
         updateVoiceOptions();
         saveInputsToStorage();
@@ -586,11 +764,13 @@
       rateInput.addEventListener("input", saveInputsToStorage);
       pitchInput.addEventListener("input", saveInputsToStorage);
       refreshHistoryBtn.addEventListener("click", loadHistory);
+      rebuildSegmentsBtn.addEventListener("click", rebuildSegmentsFromInput);
 
       (async () => {
         debugLog("Initializing frontend state");
         await loadVoicevoxSpeakers();
         restoreInputsFromStorage();
+        rebuildSegmentsFromInput();
         updateVoiceOptions();
         loadHistory();
       })();
