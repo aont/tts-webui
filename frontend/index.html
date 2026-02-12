@@ -175,6 +175,14 @@
       let historyPollTimer;
       let pendingPlaybackRecordId = null;
 
+      function debugLog(message, details) {
+        if (details === undefined) {
+          console.debug(`[tts-webui] ${message}`);
+          return;
+        }
+        console.debug(`[tts-webui] ${message}`, details);
+      }
+
       const EDGE_TTS_VOICES = [
         "en-US-JennyNeural",
         "en-US-GuyNeural",
@@ -185,6 +193,7 @@
       let voicevoxStyles = [];
 
       function fillVoiceOptions(options, selected) {
+        debugLog("Filling voice options", { count: options.length, selected });
         voiceSelect.innerHTML = options
           .map((option) => `<option value="${escapeHtml(String(option.value))}">${escapeHtml(option.label)}</option>`)
           .join("");
@@ -199,6 +208,7 @@
       }
 
       function updateVoiceOptions() {
+        debugLog("Updating voice options", { engine: engineSelect.value });
         if (engineSelect.value === "voicevox") {
           const options = voicevoxSpeakers.map((speaker) => ({
             value: speaker.speaker_id,
@@ -224,6 +234,7 @@
       }
 
       function updateVoicevoxStyleOptions() {
+        debugLog("Updating VoiceVox style options", { selectedVoice: voiceSelect.value });
         const selectedVoiceId = Number.parseInt(voiceSelect.value, 10);
         const selectedSpeaker = voicevoxSpeakers.find((speaker) => speaker.speaker_id === selectedVoiceId);
         voicevoxStyles = Array.isArray(selectedSpeaker?.styles) ? selectedSpeaker.styles : [];
@@ -243,6 +254,7 @@
       }
 
       async function loadVoicevoxSpeakers() {
+        debugLog("Loading VoiceVox speakers");
         try {
           const response = await fetch("/api/command", {
             method: "POST",
@@ -256,7 +268,9 @@
 
           const payload = await response.json();
           voicevoxSpeakers = Array.isArray(payload.items) ? payload.items : [];
+          debugLog("Loaded VoiceVox speakers", { count: voicevoxSpeakers.length });
         } catch (error) {
+          debugLog("Failed to load VoiceVox speakers", error);
           voicevoxSpeakers = [];
           setStatus(`Failed to load VoiceVox speakers: ${String(error)}`, true);
         }
@@ -276,6 +290,7 @@
       }
 
       function playHistoryAudio(recordId, audioFilename = "") {
+        debugLog("Playing history audio", { recordId, audioFilename });
         const audioUrl = `/api/history/${encodeURIComponent(recordId)}/audio`;
         audioPlayer.src = audioUrl;
         audioPlayer.play().catch(() => {
@@ -287,6 +302,7 @@
       }
 
       function renderHistory(records) {
+        debugLog("Rendering history", { count: records.length });
         if (!records.length) {
           historyList.innerHTML = "<li class=\"history-item\">No synthesis history yet.</li>";
           return;
@@ -396,6 +412,7 @@
       }
 
       async function loadHistory() {
+        debugLog("Loading history");
         try {
           const response = await fetch("/api/command", {
             method: "POST",
@@ -408,6 +425,7 @@
 
           const payload = await response.json();
           const records = Array.isArray(payload.items) ? payload.items : [];
+          debugLog("History loaded", { count: records.length });
           renderHistory(records);
 
           if (pendingPlaybackRecordId) {
@@ -461,6 +479,7 @@
       }
 
       function setStatus(message, isError = false) {
+        debugLog("Status updated", { message, isError });
         statusEl.textContent = message;
         statusEl.style.color = isError ? "crimson" : "inherit";
       }
@@ -508,6 +527,7 @@
       }
 
       synthesizeBtn.addEventListener("click", async () => {
+        debugLog("Synthesize button clicked");
         const text = normalizeInputText(textInput.value);
         if (!text) {
           setStatus("Please enter text first.", true);
@@ -539,10 +559,12 @@
 
           const payload = await response.json();
           const recordId = payload.item?.id;
+          debugLog("Synthesis request accepted", { recordId });
           pendingPlaybackRecordId = recordId || null;
           setStatus(`Synthesis started in background${recordId ? ` (ID: ${recordId})` : ""}.`);
           loadHistory();
         } catch (error) {
+          debugLog("Failed to start synthesis", error);
           setStatus(`Failed to start synthesis: ${String(error)}`, true);
         }
 
@@ -566,6 +588,7 @@
       refreshHistoryBtn.addEventListener("click", loadHistory);
 
       (async () => {
+        debugLog("Initializing frontend state");
         await loadVoicevoxSpeakers();
         restoreInputsFromStorage();
         updateVoiceOptions();

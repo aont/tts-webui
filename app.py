@@ -3,6 +3,7 @@ import asyncio
 from datetime import datetime, timezone
 import io
 import json
+import logging
 from pathlib import Path
 import subprocess
 import tempfile
@@ -22,6 +23,10 @@ HISTORY_FILE = HISTORY_DIR / "records.json"
 MAX_HISTORY_ITEMS = 30
 DEFAULT_ENGINE = "edge-tts"
 DEFAULT_VOICEVOX_ENGINE_URL = "http://127.0.0.1:50021"
+DEFAULT_LOG_LEVEL = "DEBUG"
+
+
+logger = logging.getLogger(__name__)
 
 
 class SynthesisStoppedError(Exception):
@@ -43,6 +48,7 @@ def load_history_records() -> list[dict[str, Any]]:
     try:
         records = json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
+        logger.exception("Failed to load history records from %s", HISTORY_FILE)
         return []
 
     if not isinstance(records, list):
@@ -53,6 +59,7 @@ def load_history_records() -> list[dict[str, Any]]:
 
 def save_history_records(records: list[dict[str, Any]]) -> None:
     ensure_history_storage()
+    logger.debug("Persisting %d history records to %s", len(records), HISTORY_FILE)
     HISTORY_FILE.write_text(
         json.dumps(records, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -61,6 +68,8 @@ def save_history_records(records: list[dict[str, Any]]) -> None:
 
 def trim_history(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     stale_records = records[MAX_HISTORY_ITEMS:]
+    if stale_records:
+        logger.debug("Trimming %d stale history record(s)", len(stale_records))
     for stale_record in stale_records:
         stale_filename = stale_record.get("audio_filename")
         if stale_filename:
@@ -114,6 +123,12 @@ def split_text_segments(text: str, max_chars: int = MAX_SEGMENT_CHARS) -> list[s
     if current_segment:
         segments.append(" ".join(current_segment))
 
+    logger.debug(
+        "Split input text into %d segment(s) (max_chars=%d, input_len=%d)",
+        len(segments),
+        max_chars,
+        len(stripped_text),
+    )
     return segments
 
 
@@ -125,10 +140,19 @@ async def synthesize_speech_iter(
     stop_event: asyncio.Event,
 ) -> bytes:
     audio_chunks: list[bytes] = []
+    logger.debug(
+        "Starting edge-tts synthesis (voice=%s, rate=%s, pitch=%s, text_len=%d)",
+        voice,
+        rate,
+        pitch,
+        len(text),
+    )
 
-    for text_segment in split_text_segments(text):
+    for index, text_segment in enumerate(split_text_segments(text), start=1):
         if stop_event.is_set():
             raise SynthesisStoppedError("Synthesis stopped by user")
+
+        logger.debug("edge-tts segment %d queued (segment_len=%d)", index, len(text_segment))
 
         communicate = edge_tts.Communicate(
             text=text_segment,
@@ -157,9 +181,15 @@ async def synthesize_speech_voicevox(
         raise SynthesisStoppedError("Synthesis stopped by user")
 
     wav_chunks: list[bytes] = []
+    logger.debug(
+        "Starting VoiceVox synthesis (speaker=%s, text_len=%d, engine_url=%s)",
+        speaker,
+        len(text),
+        voicevox_engine_url,
+    )
 
     async with ClientSession() as session:
-        for text_segment in split_text_segments(text):
+        for index, text_segment in enumerate(split_text_segments(text), start=1):
             if stop_event.is_set():
                 raise SynthesisStoppedError("Synthesis stopped by user")
 
@@ -170,6 +200,12 @@ async def synthesize_speech_voicevox(
                 query_url,
                 params={"text": text_segment, "speaker": speaker},
             ) as query_response:
+                logger.debug(
+                    "VoiceVox audio_query request sent (segment=%d, chars=%d, status=%d)",
+                    index,
+                    len(text_segment),
+                    query_response.status,
+                )
                 if query_response.status >= 400:
                     error_body = await query_response.text()
                     raise RuntimeError(
@@ -182,6 +218,11 @@ async def synthesize_speech_voicevox(
                 params={"speaker": speaker},
                 json=audio_query,
             ) as synth_response:
+                logger.debug(
+                    "VoiceVox synthesis request sent (segment=%d, status=%d)",
+                    index,
+                    synth_response.status,
+                )
                 if synth_response.status >= 400:
                     error_body = await synth_response.text()
                     raise RuntimeError(
@@ -194,6 +235,7 @@ async def synthesize_speech_voicevox(
 
 def encode_voicevox_wav_chunks_to_opus(wav_chunks: list[bytes]) -> bytes:
     if not wav_chunks:
+        logger.debug("No VoiceVox WAV chunks were returned")
         return b""
 
     channels: int | None = None
@@ -255,6 +297,7 @@ def encode_voicevox_wav_chunks_to_opus(wav_chunks: list[bytes]) -> bytes:
 
 async def fetch_voicevox_speakers(voicevox_engine_url: str) -> list[dict[str, Any]]:
     speakers_url = f"{voicevox_engine_url}/speakers"
+    logger.debug("Fetching VoiceVox speakers from %s", speakers_url)
     try:
         async with ClientSession() as session:
             async with session.get(speakers_url) as response:
@@ -298,6 +341,7 @@ async def fetch_voicevox_speakers(voicevox_engine_url: str) -> list[dict[str, An
             }
         )
 
+    logger.debug("Fetched %d VoiceVox speaker entries", len(speaker_items))
     return speaker_items
 
 
@@ -309,6 +353,7 @@ class SynthesisManager:
         self._voicevox_engine_url = voicevox_engine_url
 
     async def _update_history(self, record_id: str, updates: dict[str, Any]) -> None:
+        logger.debug("Updating history record %s with keys=%s", record_id, sorted(updates.keys()))
         async with self._history_lock:
             records = load_history_records()
             for record in records:
@@ -318,6 +363,7 @@ class SynthesisManager:
             save_history_records(trim_history(records))
 
     async def _create_history_record(self, payload: dict[str, Any]) -> dict[str, Any]:
+        logger.debug("Creating history record %s", payload.get("id"))
         async with self._history_lock:
             records = load_history_records()
             records.insert(0, payload)
@@ -328,6 +374,13 @@ class SynthesisManager:
         record_id = uuid4().hex
         stop_event = asyncio.Event()
         self._stop_events[record_id] = stop_event
+        logger.debug(
+            "Registering synthesis task %s (engine=%s, voice=%s, text_len=%d)",
+            record_id,
+            engine,
+            voice,
+            len(text),
+        )
 
         record = {
             "id": record_id,
@@ -369,6 +422,7 @@ class SynthesisManager:
     ) -> None:
         audio_data = b""
         try:
+            logger.debug("Synthesis task %s started (engine=%s)", record_id, engine)
             if engine == "voicevox":
                 try:
                     speaker_id = int(voice)
@@ -397,6 +451,7 @@ class SynthesisManager:
                     "completed_at": now_iso(),
                 },
             )
+            logger.debug("Synthesis task %s completed (audio_bytes=%d)", record_id, len(audio_data))
         except SynthesisStoppedError:
             filename = None
             if audio_data:
@@ -412,7 +467,9 @@ class SynthesisManager:
                     "stopped_at": now_iso(),
                 },
             )
+            logger.debug("Synthesis task %s stopped by user", record_id)
         except Exception as exc:
+            logger.exception("Synthesis task %s failed: %s", record_id, exc)
             await self._update_history(
                 record_id,
                 {
@@ -422,6 +479,7 @@ class SynthesisManager:
                 },
             )
         finally:
+            logger.debug("Cleaning up synthesis task %s", record_id)
             self._tasks.pop(record_id, None)
             self._stop_events.pop(record_id, None)
 
@@ -475,6 +533,7 @@ async def api_command_handler(request: web.Request) -> web.Response:
         raise web.HTTPBadRequest(reason="Invalid JSON payload")
 
     action = (payload.get("action") or "").strip()
+    logger.debug("Received /api/command action=%s payload_keys=%s", action, sorted(payload.keys()))
     if not action:
         raise web.HTTPBadRequest(reason="action is required")
 
@@ -517,6 +576,7 @@ async def api_command_handler(request: web.Request) -> web.Response:
 
 
 def create_app(voicevox_engine_url: str, serve_frontend: bool = True) -> web.Application:
+    logger.debug("Creating app (serve_frontend=%s, voicevox_engine_url=%s)", serve_frontend, voicevox_engine_url)
     app = web.Application()
     app["synthesis_manager"] = SynthesisManager(voicevox_engine_url=voicevox_engine_url)
     app["voicevox_engine_url"] = voicevox_engine_url
@@ -550,6 +610,11 @@ def parse_args() -> argparse.Namespace:
         help="Disable serving frontend files from this process",
     )
     parser.add_argument(
+        "--log-level",
+        default=DEFAULT_LOG_LEVEL,
+        help=f"Logging level (default: {DEFAULT_LOG_LEVEL})",
+    )
+    parser.add_argument(
         "--voicevox-engine-url",
         default=DEFAULT_VOICEVOX_ENGINE_URL,
         help=f"VoiceVox engine base URL (default: {DEFAULT_VOICEVOX_ENGINE_URL})",
@@ -559,6 +624,11 @@ def parse_args() -> argparse.Namespace:
 
 if __name__ == "__main__":
     args = parse_args()
+    logging.basicConfig(
+        level=getattr(logging, str(args.log_level).upper(), logging.DEBUG),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    logger.debug("Starting server with args=%s", vars(args))
     web.run_app(
         create_app(
             voicevox_engine_url=args.voicevox_engine_url,
