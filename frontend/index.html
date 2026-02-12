@@ -112,6 +112,16 @@
         justify-content: space-between;
         align-items: center;
         gap: 0.6rem;
+        flex-wrap: wrap;
+      }
+      .segment-controls {
+        display: flex;
+        gap: 0.6rem;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .segment-controls input {
+        width: 7rem;
       }
       .segment-list {
         list-style: none;
@@ -144,8 +154,14 @@
 
     <section class="segment-panel">
       <div class="segment-header">
-        <strong>Segments (max 3000 chars each)</strong>
-        <button id="rebuildSegmentsBtn" type="button">Rebuild</button>
+        <strong id="segmentTitle">Segments</strong>
+        <div class="segment-controls">
+          <label for="maxSegmentCharsInput">Max chars:</label>
+          <input id="maxSegmentCharsInput" type="number" min="1" max="3000" step="1" value="3000" />
+          <label for="maxSplitPointsInput">Max split points:</label>
+          <input id="maxSplitPointsInput" type="number" min="0" max="200" step="1" value="0" />
+          <button id="rebuildSegmentsBtn" type="button">Rebuild</button>
+        </div>
       </div>
       <ul id="segmentList" class="segment-list"></ul>
     </section>
@@ -215,7 +231,12 @@
       const refreshHistoryBtn = document.getElementById("refreshHistoryBtn");
       const rebuildSegmentsBtn = document.getElementById("rebuildSegmentsBtn");
       const segmentList = document.getElementById("segmentList");
-      const MAX_SEGMENT_CHARS = 3000;
+      const segmentTitle = document.getElementById("segmentTitle");
+      const maxSegmentCharsInput = document.getElementById("maxSegmentCharsInput");
+      const maxSplitPointsInput = document.getElementById("maxSplitPointsInput");
+      const DEFAULT_MAX_SEGMENT_CHARS = 3000;
+      const DEFAULT_MAX_SPLIT_POINTS = 0;
+      const MAX_SPLIT_POINTS_LIMIT = 200;
       const SENTENCE_END_CHARS = new Set(["。", "．", ".", "!", "?", "！", "？", "\n"]);
       const TRAILING_CLOSERS = /^[\s\"'\)\]\}」』】》〉》）】”’]+$/;
 
@@ -228,6 +249,8 @@
         pitch: "edgeTtsWebUi.pitch",
         voicevoxStyle: "edgeTtsWebUi.voicevoxStyle",
         pyaitalkVoice: "edgeTtsWebUi.pyaitalkVoice",
+        maxSegmentChars: "edgeTtsWebUi.maxSegmentChars",
+        maxSplitPoints: "edgeTtsWebUi.maxSplitPoints",
       };
 
       let historyPollTimer;
@@ -433,7 +456,27 @@
         return [...candidates].filter((point) => point > 0).sort((a, b) => a - b);
       }
 
-      function buildSegmentBoundaries(text, maxChars = MAX_SEGMENT_CHARS) {
+      function parsePositiveInt(value, fallback, min = 1, max = Number.POSITIVE_INFINITY) {
+        const parsed = Number.parseInt(String(value), 10);
+        if (!Number.isInteger(parsed)) {
+          return fallback;
+        }
+        return Math.min(Math.max(parsed, min), max);
+      }
+
+      function getSegmentationSettings() {
+        const maxChars = parsePositiveInt(maxSegmentCharsInput.value, DEFAULT_MAX_SEGMENT_CHARS, 1, DEFAULT_MAX_SEGMENT_CHARS);
+        const maxSplitPoints = parsePositiveInt(maxSplitPointsInput.value, DEFAULT_MAX_SPLIT_POINTS, 0, MAX_SPLIT_POINTS_LIMIT);
+        return { maxChars, maxSplitPoints };
+      }
+
+      function updateSegmentTitle() {
+        const { maxChars, maxSplitPoints } = getSegmentationSettings();
+        const splitPointsLabel = maxSplitPoints > 0 ? `${maxSplitPoints}` : "auto";
+        segmentTitle.textContent = `Segments (max ${maxChars} chars, split points: ${splitPointsLabel})`;
+      }
+
+      function buildSegmentBoundaries(text, maxChars = DEFAULT_MAX_SEGMENT_CHARS, maxSplitPoints = DEFAULT_MAX_SPLIT_POINTS) {
         if (!text) {
           return { boundaries: [], candidates: [] };
         }
@@ -459,6 +502,11 @@
 
           boundaries.push(selected);
           start = selected;
+
+          if (maxSplitPoints > 0 && boundaries.length >= maxSplitPoints + 1 && start < text.length) {
+            boundaries[boundaries.length - 1] = text.length;
+            break;
+          }
         }
 
         return { boundaries, candidates };
@@ -490,7 +538,8 @@
             if (point <= previousEdge || point >= nextEdge || point === currentEdge) {
               return false;
             }
-            return point - previousEdge <= MAX_SEGMENT_CHARS && nextEdge - point <= MAX_SEGMENT_CHARS;
+            const { maxChars } = getSegmentationSettings();
+            return point - previousEdge <= maxChars && nextEdge - point <= maxChars;
           })
           .sort((a, b) => a - b);
 
@@ -549,8 +598,10 @@
 
       function rebuildSegmentsFromInput() {
         const text = normalizeInputText(textInput.value);
-        const { boundaries, candidates } = buildSegmentBoundaries(text);
+        const { maxChars, maxSplitPoints } = getSegmentationSettings();
+        const { boundaries, candidates } = buildSegmentBoundaries(text, maxChars, maxSplitPoints);
         segmentState = { text, boundaries, candidates };
+        updateSegmentTitle();
         renderSegments();
       }
 
@@ -755,6 +806,8 @@
         localStorage.setItem(STORAGE_KEYS.rate, rateInput.value);
         localStorage.setItem(STORAGE_KEYS.pitch, pitchInput.value);
         localStorage.setItem(STORAGE_KEYS.voicevoxStyle, voicevoxStyleSelect.value);
+        localStorage.setItem(STORAGE_KEYS.maxSegmentChars, String(getSegmentationSettings().maxChars));
+        localStorage.setItem(STORAGE_KEYS.maxSplitPoints, String(getSegmentationSettings().maxSplitPoints));
       }
 
       function restoreInputsFromStorage() {
@@ -766,6 +819,8 @@
         const savedPitch = localStorage.getItem(STORAGE_KEYS.pitch);
         const savedVoicevoxStyle = localStorage.getItem(STORAGE_KEYS.voicevoxStyle);
         const savedPyaitalkVoice = localStorage.getItem(STORAGE_KEYS.pyaitalkVoice);
+        const savedMaxSegmentChars = localStorage.getItem(STORAGE_KEYS.maxSegmentChars);
+        const savedMaxSplitPoints = localStorage.getItem(STORAGE_KEYS.maxSplitPoints);
 
         if (savedText !== null) {
           textInput.value = savedText;
@@ -796,6 +851,13 @@
         if (savedVoicevoxStyle !== null) {
           voicevoxStyleSelect.value = savedVoicevoxStyle;
         }
+
+        maxSegmentCharsInput.value = String(
+          parsePositiveInt(savedMaxSegmentChars, DEFAULT_MAX_SEGMENT_CHARS, 1, DEFAULT_MAX_SEGMENT_CHARS),
+        );
+        maxSplitPointsInput.value = String(
+          parsePositiveInt(savedMaxSplitPoints, DEFAULT_MAX_SPLIT_POINTS, 0, MAX_SPLIT_POINTS_LIMIT),
+        );
       }
 
       synthesizeBtn.addEventListener("click", async () => {
@@ -847,6 +909,14 @@
 
       textInput.addEventListener("input", saveInputsToStorage);
       textInput.addEventListener("input", rebuildSegmentsFromInput);
+      maxSegmentCharsInput.addEventListener("input", () => {
+        saveInputsToStorage();
+        rebuildSegmentsFromInput();
+      });
+      maxSplitPointsInput.addEventListener("input", () => {
+        saveInputsToStorage();
+        rebuildSegmentsFromInput();
+      });
       endpointInput.addEventListener("change", async () => {
         try {
           endpointInput.value = normalizeEndpointUrl(endpointInput.value);
