@@ -320,16 +320,23 @@ async def synthesize_speech_pyaitalk(
                     )
 
         async with session.post(voice_load_url, json={"voice": voice}) as voice_load_response:
+            voice_load_body = await voice_load_response.text()
             logger.debug(
-                "pyaitalk voice/load request sent (voice=%s, status=%d)",
+                "pyaitalk voice/load request sent (voice=%s, status=%d, body=%s)",
                 voice,
                 voice_load_response.status,
+                voice_load_body,
             )
             if voice_load_response.status >= 400:
-                error_body = await voice_load_response.text()
-                raise RuntimeError(
-                    f"pyaitalk voice/load failed ({voice_load_response.status}): {error_body}"
-                )
+                if "ALREADY_LOADED" in voice_load_body:
+                    logger.debug(
+                        "pyaitalk voice/load returned ALREADY_LOADED; continuing synthesis"
+                    )
+                else:
+                    raise RuntimeError(
+                        "pyaitalk voice/load failed "
+                        f"({voice_load_response.status}): {voice_load_body}"
+                    )
 
         for index, text_segment in enumerate(segments, start=1):
             if stop_event.is_set():
