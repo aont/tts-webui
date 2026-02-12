@@ -298,8 +298,17 @@ async def synthesize_speech_pyaitalk(
     )
 
     async with ClientSession() as session:
+        init_url = f"{pyaitalk_api_url}/init"
         voice_load_url = f"{pyaitalk_api_url}/voice/load"
         synth_url = f"{pyaitalk_api_url}/synthesize"
+
+        async with session.post(init_url) as init_response:
+            logger.debug("pyaitalk init request sent (status=%d)", init_response.status)
+            if init_response.status >= 400:
+                error_body = await init_response.text()
+                raise RuntimeError(
+                    f"pyaitalk init failed ({init_response.status}): {error_body}"
+                )
 
         async with session.post(voice_load_url, json={"voice": voice}) as voice_load_response:
             logger.debug(
