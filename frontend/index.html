@@ -477,12 +477,20 @@
           return;
         }
 
+        const SEGMENT_PREVIEW_CHARS = 5;
+        const canMoveBoundaries = segments.length > 1;
+
         segmentList.innerHTML = segments
           .map((segment, index) => {
-            const moveButtons = index < segments.length - 1
+            const segmentBeginning = segment.slice(0, SEGMENT_PREVIEW_CHARS);
+            const segmentEnd = segment.slice(-SEGMENT_PREVIEW_CHARS);
+            const segmentPreview = segment.length > SEGMENT_PREVIEW_CHARS * 2
+              ? `${escapeHtml(segmentBeginning)}...${escapeHtml(segmentEnd)}`
+              : escapeHtml(segment);
+            const moveButtons = canMoveBoundaries && index < segments.length - 1
               ? `<div class=\"actions\"><button type=\"button\" data-move-boundary=\"${index}\" data-direction=\"backward\">← Move split earlier</button><button type=\"button\" data-move-boundary=\"${index}\" data-direction=\"forward\">Move split later →</button></div>`
               : "";
-            return `<li class=\"segment-item\"><strong>Segment ${index + 1} (${segment.length} chars)</strong><p>${escapeHtml(segment)}</p>${moveButtons}</li>`;
+            return `<li class=\"segment-item\"><strong>Segment ${index + 1} (${segment.length} chars)</strong><p>${segmentPreview}</p>${moveButtons}</li>`;
           })
           .join("");
 
