@@ -297,6 +297,7 @@ async def synthesize_speech_pyaitalk(
         pyaitalk_api_url,
     )
 
+    pyaitalk_api_url = pyaitalk_api_url.rstrip("/")
     synth_url = f"{pyaitalk_api_url}/synthesize"
     async with ClientSession() as session:
         for index, text_segment in enumerate(segments, start=1):
@@ -440,6 +441,7 @@ async def fetch_voicevox_speakers(voicevox_engine_url: str) -> list[dict[str, An
 
 
 async def fetch_pyaitalk_voices(pyaitalk_api_url: str) -> list[dict[str, str]]:
+    pyaitalk_api_url = pyaitalk_api_url.rstrip("/")
     voices_url = f"{pyaitalk_api_url}/voice/list"
     logger.debug("Fetching pyaitalk voices from %s", voices_url)
     try:
