@@ -436,31 +436,33 @@
         }
         return segments;
       }
-
-      function moveBoundary(index, direction) {
+      function getBoundaryMoveTargets(index) {
         if (index < 0 || index >= segmentState.boundaries.length - 1) {
-          return;
+          return { backward: null, forward: null };
         }
 
         const previousEdge = index === 0 ? 0 : segmentState.boundaries[index - 1];
         const currentEdge = segmentState.boundaries[index];
         const nextEdge = segmentState.boundaries[index + 1];
 
-        const options = segmentState.candidates.filter((point) => {
-          if (point <= previousEdge || point >= nextEdge || point === currentEdge) {
-            return false;
-          }
-          return point - previousEdge <= MAX_SEGMENT_CHARS && nextEdge - point <= MAX_SEGMENT_CHARS;
-        });
+        const options = segmentState.candidates
+          .filter((point) => {
+            if (point <= previousEdge || point >= nextEdge || point === currentEdge) {
+              return false;
+            }
+            return point - previousEdge <= MAX_SEGMENT_CHARS && nextEdge - point <= MAX_SEGMENT_CHARS;
+          })
+          .sort((a, b) => a - b);
 
-        if (!options.length) {
-          return;
-        }
+        return {
+          backward: options.filter((value) => value < currentEdge).at(-1) ?? null,
+          forward: options.find((value) => value > currentEdge) ?? null,
+        };
+      }
 
-        const sorted = options.sort((a, b) => a - b);
-        const target = direction === "backward"
-          ? sorted.filter((value) => value < currentEdge).at(-1)
-          : sorted.find((value) => value > currentEdge);
+      function moveBoundary(index, direction) {
+        const targets = getBoundaryMoveTargets(index);
+        const target = direction === "backward" ? targets.backward : targets.forward;
 
         if (!target) {
           return;
@@ -487,9 +489,11 @@
             const segmentPreview = segment.length > SEGMENT_PREVIEW_CHARS * 2
               ? `${escapeHtml(segmentBeginning)}...${escapeHtml(segmentEnd)}`
               : escapeHtml(segment);
-            const moveButtons = canMoveBoundaries && index < segments.length - 1
-              ? `<div class=\"actions\"><button type=\"button\" data-move-boundary=\"${index}\" data-direction=\"backward\">← Move split earlier</button><button type=\"button\" data-move-boundary=\"${index}\" data-direction=\"forward\">Move split later →</button></div>`
-              : "";
+            let moveButtons = "";
+            if (canMoveBoundaries && index < segments.length - 1) {
+              const targets = getBoundaryMoveTargets(index);
+              moveButtons = `<div class="actions"><button type="button" data-move-boundary="${index}" data-direction="backward" ${targets.backward ? "" : "disabled"}>← Move split earlier</button><button type="button" data-move-boundary="${index}" data-direction="forward" ${targets.forward ? "" : "disabled"}>Move split later →</button></div>`;
+            }
             return `<li class=\"segment-item\"><strong>Segment ${index + 1} (${segment.length} chars)</strong><p>${segmentPreview}</p>${moveButtons}</li>`;
           })
           .join("");
