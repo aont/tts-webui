@@ -105,6 +105,19 @@
         justify-content: space-between;
         align-items: center;
         gap: 0.6rem;
+        flex-wrap: wrap;
+      }
+      .segment-header-controls {
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+        flex-wrap: wrap;
+      }
+      .segment-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        font-size: 0.95rem;
       }
       .segment-list {
         list-style: none;
@@ -138,7 +151,13 @@
     <section class="segment-panel">
       <div class="segment-header">
         <strong>Segments (max 3000 chars each)</strong>
-        <button id="rebuildSegmentsBtn" type="button">Rebuild</button>
+        <div class="segment-header-controls">
+          <label class="segment-toggle" for="showFullSegmentsInput">
+            <input id="showFullSegmentsInput" type="checkbox" />
+            Show full text
+          </label>
+          <button id="rebuildSegmentsBtn" type="button">Rebuild</button>
+        </div>
       </div>
       <ul id="segmentList" class="segment-list"></ul>
     </section>
@@ -201,8 +220,10 @@
       const historyList = document.getElementById("historyList");
       const refreshHistoryBtn = document.getElementById("refreshHistoryBtn");
       const rebuildSegmentsBtn = document.getElementById("rebuildSegmentsBtn");
+      const showFullSegmentsInput = document.getElementById("showFullSegmentsInput");
       const segmentList = document.getElementById("segmentList");
       const MAX_SEGMENT_CHARS = 3000;
+      const SEGMENT_CONTEXT_WINDOW = 120;
       const SENTENCE_END_CHARS = new Set(["。", "．", ".", "!", "?", "！", "？", "\n"]);
       const TRAILING_CLOSERS = /^[\s\"'\)\]\}」』】》〉》）】”’]+$/;
 
@@ -213,6 +234,7 @@
         rate: "edgeTtsWebUi.rate",
         pitch: "edgeTtsWebUi.pitch",
         voicevoxStyle: "edgeTtsWebUi.voicevoxStyle",
+        showFullSegments: "edgeTtsWebUi.showFullSegments",
       };
 
       let historyPollTimer;
@@ -434,6 +456,7 @@
 
       function renderSegments() {
         const segments = getCurrentSegments();
+        const showFullText = showFullSegmentsInput.checked;
         if (!segments.length) {
           segmentList.innerHTML = "<li class=\"segment-item\">No text.</li>";
           return;
@@ -441,10 +464,30 @@
 
         segmentList.innerHTML = segments
           .map((segment, index) => {
+            let displayText = segment;
+            let helperText = "";
+
+            if (!showFullText) {
+              const segmentStart = index === 0 ? 0 : segmentState.boundaries[index - 1];
+              const segmentEnd = segmentState.boundaries[index];
+              const previewStart = Math.max(0, segmentStart - SEGMENT_CONTEXT_WINDOW);
+              const previewEnd = Math.min(segmentState.text.length, segmentEnd + SEGMENT_CONTEXT_WINDOW);
+              displayText = segmentState.text.slice(previewStart, previewEnd);
+
+              if (previewStart > 0) {
+                displayText = `…${displayText}`;
+              }
+              if (previewEnd < segmentState.text.length) {
+                displayText = `${displayText}…`;
+              }
+
+              helperText = "<p><small>Preview around neighboring split candidates.</small></p>";
+            }
+
             const moveButtons = index < segments.length - 1
-              ? `<div class=\"actions\"><button type=\"button\" data-move-boundary=\"${index}\" data-direction=\"backward\">← Move split earlier</button><button type=\"button\" data-move-boundary=\"${index}\" data-direction=\"forward\">Move split later →</button></div>`
+              ? `<div class="actions"><button type="button" data-move-boundary="${index}" data-direction="backward">← Move split earlier</button><button type="button" data-move-boundary="${index}" data-direction="forward">Move split later →</button></div>`
               : "";
-            return `<li class=\"segment-item\"><strong>Segment ${index + 1} (${segment.length} chars)</strong><p>${escapeHtml(segment)}</p>${moveButtons}</li>`;
+            return `<li class="segment-item"><strong>Segment ${index + 1} (${segment.length} chars)</strong>${helperText}<p>${escapeHtml(displayText)}</p>${moveButtons}</li>`;
           })
           .join("");
 
@@ -675,6 +718,7 @@
         const savedRate = localStorage.getItem(STORAGE_KEYS.rate);
         const savedPitch = localStorage.getItem(STORAGE_KEYS.pitch);
         const savedVoicevoxStyle = localStorage.getItem(STORAGE_KEYS.voicevoxStyle);
+        const savedShowFullSegments = localStorage.getItem(STORAGE_KEYS.showFullSegments);
 
         if (savedText !== null) {
           textInput.value = savedText;
@@ -698,6 +742,10 @@
 
         if (savedVoicevoxStyle !== null) {
           voicevoxStyleSelect.value = savedVoicevoxStyle;
+        }
+
+        if (savedShowFullSegments !== null) {
+          showFullSegmentsInput.checked = savedShowFullSegments === "true";
         }
       }
 
@@ -765,6 +813,10 @@
       pitchInput.addEventListener("input", saveInputsToStorage);
       refreshHistoryBtn.addEventListener("click", loadHistory);
       rebuildSegmentsBtn.addEventListener("click", rebuildSegmentsFromInput);
+      showFullSegmentsInput.addEventListener("change", () => {
+        localStorage.setItem(STORAGE_KEYS.showFullSegments, String(showFullSegmentsInput.checked));
+        renderSegments();
+      });
 
       (async () => {
         debugLog("Initializing frontend state");
