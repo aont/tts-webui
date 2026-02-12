@@ -298,6 +298,7 @@
             const createdAtLabel = Number.isNaN(createdAt.getTime()) ? "Unknown time" : createdAt.toLocaleString();
             const preview = escapeHtml(truncateText(record.text || ""));
             const status = escapeHtml(record.status || "unknown");
+            const voiceLabel = escapeHtml(resolveVoiceLabel(record));
             const canPlay = Boolean(record.audio_filename);
             const canStop = record.status === "in_progress" || record.status === "stopping";
             const actionButtons = [
@@ -315,7 +316,7 @@
               <li class=\"history-item\">
                 <div class=\"history-item-main\">
                   <div class=\"history-meta\">
-                    <strong>${escapeHtml(record.voice || "unknown")}</strong>
+                    <strong>${voiceLabel}</strong>
                     <div>Engine: ${escapeHtml(record.engine || "edge-tts")}</div>
                     <div>${escapeHtml(record.rate || "")}, ${escapeHtml(record.pitch || "")}</div>
                     <div>${escapeHtml(createdAtLabel)}</div>
@@ -363,6 +364,35 @@
             }
           });
         });
+      }
+
+      function resolveVoiceLabel(record) {
+        const rawVoice = String(record.voice || "unknown");
+        if (record.engine !== "voicevox") {
+          return rawVoice;
+        }
+
+        const styleId = Number.parseInt(rawVoice, 10);
+        if (Number.isNaN(styleId)) {
+          return rawVoice;
+        }
+
+        for (const speaker of voicevoxSpeakers) {
+          if (!Array.isArray(speaker.styles)) {
+            continue;
+          }
+
+          const matchedStyle = speaker.styles.find((style) => style.id === styleId);
+          if (!matchedStyle) {
+            continue;
+          }
+
+          const speakerName = speaker.name || "Unknown";
+          const styleName = matchedStyle.name || "Unknown";
+          return styleName ? `${speakerName} (${styleName})` : speakerName;
+        }
+
+        return rawVoice;
       }
 
       async function loadHistory() {
