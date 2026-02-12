@@ -822,8 +822,14 @@
 
       (async () => {
         debugLog("Initializing frontend state");
-        await loadVoicevoxSpeakers();
         restoreInputsFromStorage();
+        try {
+          endpointInput.value = normalizeEndpointUrl(endpointInput.value);
+        } catch (error) {
+          debugLog("Invalid saved API endpoint. Falling back to default.", error);
+          endpointInput.value = getDefaultEndpoint();
+        }
+        await loadVoicevoxSpeakers();
         rebuildSegmentsFromInput();
         updateVoiceOptions();
         loadHistory();
