@@ -136,7 +136,7 @@
   <body>
     <h1>Speech Synthesis HTTP Demo</h1>
     <p>
-      Enter text and synthesize speech using <code>edge-tts</code> or <code>voicevox</code>. Communication between frontend and backend happens via
+      Enter text and synthesize speech using <code>edge-tts</code>, <code>voicevox</code>, or <code>pyaitalk</code>. Communication between frontend and backend happens via
       HTTP (GET/POST).
     </p>
 
@@ -160,6 +160,7 @@
         <select id="engineSelect">
           <option value="edge-tts">edge-tts</option>
           <option value="voicevox">voicevox</option>
+          <option value="pyaitalk">pyaitalk</option>
         </select>
       </div>
       <div class="control-group">
@@ -250,6 +251,11 @@
         "en-GB-SoniaNeural",
         "ja-JP-NanamiNeural",
       ];
+
+      const PYAITALK_VOICES = [
+        "nozomi_22",
+      ];
+
       let voicevoxSpeakers = [];
       let voicevoxStyles = [];
 
@@ -303,6 +309,19 @@
           fillVoiceOptions(options, localStorage.getItem(STORAGE_KEYS.voice));
           updateVoicevoxStyleOptions();
           voicevoxStyleGroup.hidden = false;
+          rateInput.disabled = true;
+          pitchInput.disabled = true;
+          return;
+        }
+
+        if (engineSelect.value === "pyaitalk") {
+          fillVoiceOptions(
+            PYAITALK_VOICES.map((voice) => ({ value: voice, label: voice })),
+            localStorage.getItem(STORAGE_KEYS.voice),
+          );
+          voicevoxStyles = [];
+          voicevoxStyleSelect.innerHTML = "";
+          voicevoxStyleGroup.hidden = true;
           rateInput.disabled = true;
           pitchInput.disabled = true;
           return;
@@ -778,6 +797,8 @@
               voice: engineSelect.value === "voicevox" ? voicevoxStyleSelect.value : voiceSelect.value,
               style: engineSelect.value === "voicevox"
                 ? (voicevoxStyles.find((item) => String(item.id) === voicevoxStyleSelect.value)?.name || "")
+                : engineSelect.value === "pyaitalk"
+                ? voiceSelect.value
                 : "",
               rate: rateInput.value.trim() || "+0%",
               pitch: pitchInput.value.trim() || "+0Hz",
