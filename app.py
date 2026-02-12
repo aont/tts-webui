@@ -302,7 +302,7 @@ async def synthesize_speech_pyaitalk(
         voice_load_url = f"{pyaitalk_api_url}/voice/load"
         synth_url = f"{pyaitalk_api_url}/synthesize"
 
-        async with session.post(init_url) as init_response:
+        async with session.post(init_url, json={}) as init_response:
             logger.debug("pyaitalk init request sent (status=%d)", init_response.status)
             if init_response.status >= 400:
                 error_body = await init_response.text()
