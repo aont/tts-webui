@@ -303,12 +303,21 @@ async def synthesize_speech_pyaitalk(
         synth_url = f"{pyaitalk_api_url}/synthesize"
 
         async with session.post(init_url, json={}) as init_response:
-            logger.debug("pyaitalk init request sent (status=%d)", init_response.status)
+            error_body = await init_response.text()
+            logger.debug(
+                "pyaitalk init request sent (status=%d, body=%s)",
+                init_response.status,
+                error_body,
+            )
             if init_response.status >= 400:
-                error_body = await init_response.text()
-                raise RuntimeError(
-                    f"pyaitalk init failed ({init_response.status}): {error_body}"
-                )
+                if "ALREADY_INITIALIZED" in error_body:
+                    logger.debug(
+                        "pyaitalk init returned ALREADY_INITIALIZED; continuing synthesis"
+                    )
+                else:
+                    raise RuntimeError(
+                        f"pyaitalk init failed ({init_response.status}): {error_body}"
+                    )
 
         async with session.post(voice_load_url, json={"voice": voice}) as voice_load_response:
             logger.debug(
