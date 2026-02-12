@@ -23,6 +23,7 @@ HISTORY_FILE = HISTORY_DIR / "records.json"
 MAX_HISTORY_ITEMS = 30
 DEFAULT_ENGINE = "edge-tts"
 DEFAULT_VOICEVOX_ENGINE_URL = "http://127.0.0.1:50021"
+DEFAULT_PYAITALK_API_URL = "http://127.0.0.1:8080"
 DEFAULT_LOG_LEVEL = "DEBUG"
 
 
@@ -279,9 +280,52 @@ async def synthesize_speech_voicevox(
     return encode_voicevox_wav_chunks_to_opus(wav_chunks)
 
 
-def encode_voicevox_wav_chunks_to_opus(wav_chunks: list[bytes]) -> bytes:
+async def synthesize_speech_pyaitalk(
+    segments: list[str],
+    character: str,
+    pyaitalk_api_url: str,
+    stop_event: asyncio.Event,
+) -> bytes:
+    if stop_event.is_set():
+        raise SynthesisStoppedError("Synthesis stopped by user")
+
+    wav_chunks: list[bytes] = []
+    logger.debug(
+        "Starting pyaitalk synthesis (character=%s, text_len=%d, api_url=%s)",
+        character,
+        sum(len(segment) for segment in segments),
+        pyaitalk_api_url,
+    )
+
+    synth_url = f"{pyaitalk_api_url}/synthesize"
+    async with ClientSession() as session:
+        for index, text_segment in enumerate(segments, start=1):
+            if stop_event.is_set():
+                raise SynthesisStoppedError("Synthesis stopped by user")
+
+            payload: dict[str, Any] = {"text": text_segment, "output": "wav"}
+            if character.strip():
+                payload["character"] = character
+
+            async with session.post(synth_url, json=payload) as synth_response:
+                logger.debug(
+                    "pyaitalk synthesis request sent (segment=%d, status=%d)",
+                    index,
+                    synth_response.status,
+                )
+                if synth_response.status >= 400:
+                    error_body = await synth_response.text()
+                    raise RuntimeError(
+                        f"pyaitalk synthesize failed ({synth_response.status}): {error_body}"
+                    )
+                wav_chunks.append(await synth_response.read())
+
+    return encode_wav_chunks_to_opus(wav_chunks, engine_name="pyaitalk")
+
+
+def encode_wav_chunks_to_opus(wav_chunks: list[bytes], engine_name: str) -> bytes:
     if not wav_chunks:
-        logger.debug("No VoiceVox WAV chunks were returned")
+        logger.debug("No %s WAV chunks were returned", engine_name)
         return b""
 
     channels: int | None = None
@@ -304,7 +348,7 @@ def encode_voicevox_wav_chunks_to_opus(wav_chunks: list[bytes]) -> bytes:
                 or chunk_sample_width != sample_width
                 or chunk_frame_rate != frame_rate
             ):
-                raise RuntimeError("VoiceVox returned WAV chunks with mismatched audio format")
+                raise RuntimeError(f"{engine_name} returned WAV chunks with mismatched audio format")
 
             pcm_frames.append(wav_reader.readframes(wav_reader.getnframes()))
 
@@ -339,6 +383,10 @@ def encode_voicevox_wav_chunks_to_opus(wav_chunks: list[bytes]) -> bytes:
             raise RuntimeError(f"opusenc failed: {stderr_output}") from exc
 
         return output_opus_path.read_bytes()
+
+
+def encode_voicevox_wav_chunks_to_opus(wav_chunks: list[bytes]) -> bytes:
+    return encode_wav_chunks_to_opus(wav_chunks, engine_name="VoiceVox")
 
 
 async def fetch_voicevox_speakers(voicevox_engine_url: str) -> list[dict[str, Any]]:
@@ -391,12 +439,45 @@ async def fetch_voicevox_speakers(voicevox_engine_url: str) -> list[dict[str, An
     return speaker_items
 
 
+async def fetch_pyaitalk_voices(pyaitalk_api_url: str) -> list[dict[str, str]]:
+    voices_url = f"{pyaitalk_api_url}/voice/list"
+    logger.debug("Fetching pyaitalk voices from %s", voices_url)
+    try:
+        async with ClientSession() as session:
+            async with session.get(voices_url) as response:
+                if response.status >= 400:
+                    error_body = await response.text()
+                    raise web.HTTPBadGateway(
+                        reason=f"pyaitalk voice list request failed ({response.status}): {error_body}"
+                    )
+                payload = await response.json()
+    except ClientError as exc:
+        raise web.HTTPBadGateway(reason=f"pyaitalk is unavailable: {exc}") from exc
+
+    voice_names = payload.get("voices") if isinstance(payload, dict) else None
+    if not isinstance(voice_names, list):
+        raise web.HTTPBadGateway(reason="pyaitalk voice list response did not include voices")
+
+    voices: list[dict[str, str]] = []
+    for voice_name in voice_names:
+        if not isinstance(voice_name, str):
+            continue
+        normalized_name = voice_name.strip()
+        if not normalized_name:
+            continue
+        voices.append({"id": normalized_name, "name": normalized_name})
+
+    logger.debug("Fetched %d pyaitalk voice entries", len(voices))
+    return voices
+
+
 class SynthesisManager:
-    def __init__(self, voicevox_engine_url: str) -> None:
+    def __init__(self, voicevox_engine_url: str, pyaitalk_api_url: str) -> None:
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._stop_events: dict[str, asyncio.Event] = {}
         self._history_lock = asyncio.Lock()
         self._voicevox_engine_url = voicevox_engine_url
+        self._pyaitalk_api_url = pyaitalk_api_url
 
     async def _update_history(self, record_id: str, updates: dict[str, Any]) -> None:
         logger.debug("Updating history record %s with keys=%s", record_id, sorted(updates.keys()))
@@ -488,12 +569,19 @@ class SynthesisManager:
                     self._voicevox_engine_url,
                     stop_event,
                 )
+            elif engine == "pyaitalk":
+                audio_data = await synthesize_speech_pyaitalk(
+                    segments,
+                    voice,
+                    self._pyaitalk_api_url,
+                    stop_event,
+                )
             else:
                 audio_data = await synthesize_speech_iter(segments, voice, rate, pitch, stop_event)
 
             filename = None
             if audio_data:
-                filename = f"{record_id}.opus" if engine == "voicevox" else f"{record_id}.mp3"
+                filename = f"{record_id}.opus" if engine in {"voicevox", "pyaitalk"} else f"{record_id}.mp3"
                 (HISTORY_DIR / filename).write_bytes(audio_data)
 
             await self._update_history(
@@ -509,7 +597,7 @@ class SynthesisManager:
         except SynthesisStoppedError:
             filename = None
             if audio_data:
-                filename = f"{record_id}.opus" if engine == "voicevox" else f"{record_id}.mp3"
+                filename = f"{record_id}.opus" if engine in {"voicevox", "pyaitalk"} else f"{record_id}.mp3"
                 (HISTORY_DIR / filename).write_bytes(audio_data)
 
             await self._update_history(
@@ -580,6 +668,7 @@ async def history_audio_handler(request: web.Request) -> web.StreamResponse:
 async def api_command_handler(request: web.Request) -> web.Response:
     manager: SynthesisManager = request.app["synthesis_manager"]
     voicevox_engine_url = request.app["voicevox_engine_url"]
+    pyaitalk_api_url = request.app["pyaitalk_api_url"]
 
     try:
         payload = await request.json()
@@ -602,11 +691,14 @@ async def api_command_handler(request: web.Request) -> web.Response:
         if not text:
             raise web.HTTPBadRequest(reason="Text is required")
 
-        if engine not in {"edge-tts", "voicevox"}:
+        if engine not in {"edge-tts", "voicevox", "pyaitalk"}:
             raise web.HTTPBadRequest(reason="Unsupported engine")
 
         if engine == "voicevox" and not str(voice).strip():
             raise web.HTTPBadRequest(reason="voice is required for voicevox")
+
+        if engine == "pyaitalk" and not str(voice).strip():
+            raise web.HTTPBadRequest(reason="voice is required for pyaitalk")
 
         record = await manager.start(
             text=text,
@@ -620,6 +712,9 @@ async def api_command_handler(request: web.Request) -> web.Response:
 
     if action == "voicevox_speakers":
         return web.json_response({"items": await fetch_voicevox_speakers(voicevox_engine_url)})
+
+    if action == "pyaitalk_voices":
+        return web.json_response({"items": await fetch_pyaitalk_voices(pyaitalk_api_url)})
 
     if action == "stop":
         record_id = (payload.get("record_id") or "").strip()
@@ -637,11 +732,26 @@ async def api_command_handler(request: web.Request) -> web.Response:
     raise web.HTTPBadRequest(reason="Unsupported action")
 
 
-def create_app(voicevox_engine_url: str, allow_origin: str, serve_frontend: bool = True) -> web.Application:
-    logger.debug("Creating app (serve_frontend=%s, voicevox_engine_url=%s, allow_origin=%s)", serve_frontend, voicevox_engine_url, allow_origin)
+def create_app(
+    voicevox_engine_url: str,
+    pyaitalk_api_url: str,
+    allow_origin: str,
+    serve_frontend: bool = True,
+) -> web.Application:
+    logger.debug(
+        "Creating app (serve_frontend=%s, voicevox_engine_url=%s, pyaitalk_api_url=%s, allow_origin=%s)",
+        serve_frontend,
+        voicevox_engine_url,
+        pyaitalk_api_url,
+        allow_origin,
+    )
     app = web.Application(middlewares=[cors_middleware])
-    app["synthesis_manager"] = SynthesisManager(voicevox_engine_url=voicevox_engine_url)
+    app["synthesis_manager"] = SynthesisManager(
+        voicevox_engine_url=voicevox_engine_url,
+        pyaitalk_api_url=pyaitalk_api_url,
+    )
     app["voicevox_engine_url"] = voicevox_engine_url
+    app["pyaitalk_api_url"] = pyaitalk_api_url
     app["allow_origin"] = allow_origin
 
     if serve_frontend:
@@ -685,6 +795,11 @@ def parse_args() -> argparse.Namespace:
         help=f"VoiceVox engine base URL (default: {DEFAULT_VOICEVOX_ENGINE_URL})",
     )
     parser.add_argument(
+        "--pyaitalk-api-url",
+        default=DEFAULT_PYAITALK_API_URL,
+        help=f"pyaitalk API base URL (default: {DEFAULT_PYAITALK_API_URL})",
+    )
+    parser.add_argument(
         "--allow-origin",
         default="*",
         help="CORS Access-Control-Allow-Origin value (default: *)",
@@ -702,6 +817,7 @@ if __name__ == "__main__":
     web.run_app(
         create_app(
             voicevox_engine_url=args.voicevox_engine_url,
+            pyaitalk_api_url=args.pyaitalk_api_url,
             allow_origin=args.allow_origin,
             serve_frontend=not args.no_frontend,
         ),

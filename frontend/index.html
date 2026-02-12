@@ -136,7 +136,7 @@
   <body>
     <h1>Speech Synthesis HTTP Demo</h1>
     <p>
-      Enter text and synthesize speech using <code>edge-tts</code> or <code>voicevox</code>. Communication between frontend and backend happens via
+      Enter text and synthesize speech using <code>edge-tts</code>, <code>voicevox</code>, or <code>pyaitalk</code>. Communication between frontend and backend happens via
       HTTP (GET/POST).
     </p>
 
@@ -160,6 +160,7 @@
         <select id="engineSelect">
           <option value="edge-tts">edge-tts</option>
           <option value="voicevox">voicevox</option>
+          <option value="pyaitalk">pyaitalk</option>
         </select>
       </div>
       <div class="control-group">
@@ -226,6 +227,7 @@
         rate: "edgeTtsWebUi.rate",
         pitch: "edgeTtsWebUi.pitch",
         voicevoxStyle: "edgeTtsWebUi.voicevoxStyle",
+        pyaitalkVoice: "edgeTtsWebUi.pyaitalkVoice",
       };
 
       let historyPollTimer;
@@ -252,6 +254,7 @@
       ];
       let voicevoxSpeakers = [];
       let voicevoxStyles = [];
+      let pyaitalkVoices = [];
 
       function getDefaultEndpoint() {
         if (window.location.protocol.startsWith("http")) {
@@ -308,6 +311,19 @@
           return;
         }
 
+        if (engineSelect.value === "pyaitalk") {
+          fillVoiceOptions(
+            pyaitalkVoices.map((voice) => ({ value: voice.id, label: voice.name })),
+            localStorage.getItem(STORAGE_KEYS.pyaitalkVoice) || localStorage.getItem(STORAGE_KEYS.voice),
+          );
+          voicevoxStyles = [];
+          voicevoxStyleSelect.innerHTML = "";
+          voicevoxStyleGroup.hidden = true;
+          rateInput.disabled = true;
+          pitchInput.disabled = true;
+          return;
+        }
+
         fillVoiceOptions(
           EDGE_TTS_VOICES.map((voice) => ({ value: voice, label: voice })),
           localStorage.getItem(STORAGE_KEYS.voice),
@@ -359,6 +375,30 @@
           debugLog("Failed to load VoiceVox speakers", error);
           voicevoxSpeakers = [];
           setStatus(`Failed to load VoiceVox speakers: ${String(error)}`, true);
+        }
+      }
+
+
+      async function loadPyaitalkVoices() {
+        debugLog("Loading pyaitalk voices");
+        try {
+          const response = await fetch(getApiUrl("/api/command"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "pyaitalk_voices" }),
+          });
+
+          if (!response.ok) {
+            throw new Error(`pyaitalk voices request failed: ${response.status}`);
+          }
+
+          const payload = await response.json();
+          pyaitalkVoices = Array.isArray(payload.items) ? payload.items : [];
+          debugLog("Loaded pyaitalk voices", { count: pyaitalkVoices.length });
+        } catch (error) {
+          debugLog("Failed to load pyaitalk voices", error);
+          pyaitalkVoices = [];
+          setStatus(`Failed to load pyaitalk voices: ${String(error)}`, true);
         }
       }
 
@@ -711,6 +751,7 @@
         localStorage.setItem(STORAGE_KEYS.endpoint, endpointInput.value.trim());
         localStorage.setItem(STORAGE_KEYS.engine, engineSelect.value);
         localStorage.setItem(STORAGE_KEYS.voice, voiceSelect.value);
+        localStorage.setItem(STORAGE_KEYS.pyaitalkVoice, voiceSelect.value);
         localStorage.setItem(STORAGE_KEYS.rate, rateInput.value);
         localStorage.setItem(STORAGE_KEYS.pitch, pitchInput.value);
         localStorage.setItem(STORAGE_KEYS.voicevoxStyle, voicevoxStyleSelect.value);
@@ -724,6 +765,7 @@
         const savedRate = localStorage.getItem(STORAGE_KEYS.rate);
         const savedPitch = localStorage.getItem(STORAGE_KEYS.pitch);
         const savedVoicevoxStyle = localStorage.getItem(STORAGE_KEYS.voicevoxStyle);
+        const savedPyaitalkVoice = localStorage.getItem(STORAGE_KEYS.pyaitalkVoice);
 
         if (savedText !== null) {
           textInput.value = savedText;
@@ -737,6 +779,10 @@
 
         if (savedVoice !== null) {
           voiceSelect.value = savedVoice;
+        }
+
+        if (savedPyaitalkVoice !== null && savedEngine === "pyaitalk") {
+          voiceSelect.value = savedPyaitalkVoice;
         }
 
         if (savedRate !== null) {
@@ -807,6 +853,7 @@
           saveInputsToStorage();
           setStatus("API endpoint updated.");
           await loadVoicevoxSpeakers();
+          await loadPyaitalkVoices();
           updateVoiceOptions();
           loadHistory();
         } catch (error) {
@@ -839,6 +886,7 @@
           endpointInput.value = getDefaultEndpoint();
         }
         await loadVoicevoxSpeakers();
+        await loadPyaitalkVoices();
         rebuildSegmentsFromInput();
         updateVoiceOptions();
         loadHistory();
