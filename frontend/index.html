@@ -160,6 +160,7 @@
         <select id="engineSelect">
           <option value="edge-tts">edge-tts</option>
           <option value="voicevox">voicevox</option>
+          <option value="pyaitalk">pyaitalk</option>
         </select>
       </div>
       <div class="control-group">
@@ -250,6 +251,7 @@
         "en-GB-SoniaNeural",
         "ja-JP-NanamiNeural",
       ];
+      const PYAITALK_VOICES = ["nozomi_22", "akari_44", "seiji_22", "makoto_22"];
       let voicevoxSpeakers = [];
       let voicevoxStyles = [];
 
@@ -303,6 +305,19 @@
           fillVoiceOptions(options, localStorage.getItem(STORAGE_KEYS.voice));
           updateVoicevoxStyleOptions();
           voicevoxStyleGroup.hidden = false;
+          rateInput.disabled = true;
+          pitchInput.disabled = true;
+          return;
+        }
+
+        if (engineSelect.value === "pyaitalk") {
+          fillVoiceOptions(
+            PYAITALK_VOICES.map((voice) => ({ value: voice, label: voice })),
+            localStorage.getItem(STORAGE_KEYS.voice),
+          );
+          voicevoxStyles = [];
+          voicevoxStyleSelect.innerHTML = "";
+          voicevoxStyleGroup.hidden = true;
           rateInput.disabled = true;
           pitchInput.disabled = true;
           return;

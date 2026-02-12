@@ -3,7 +3,7 @@
 A minimal demo app for text-to-speech (TTS) workflows using:
 
 - **Backend**: Python, `aiohttp`
-- **TTS engines**: pluggable engines (currently `edge-tts` and `voicevox`)
+- **TTS engines**: pluggable engines (currently `edge-tts`, `voicevox`, and `pyaitalk`)
 - **Frontend**: plain HTML/JS
 - **API transport**: HTTP (`GET`/`POST`)
 
@@ -11,7 +11,7 @@ A minimal demo app for text-to-speech (TTS) workflows using:
 
 - Enter text in the browser
 - Send synthesis/stop/history commands to a **single endpoint** (`POST /api/command`)
-- Select a TTS engine per request (`edge-tts` / `voicevox`)
+- Select a TTS engine per request (`edge-tts` / `voicevox` / `pyaitalk`)
 - Long input is automatically split into manageable chunks, synthesized per chunk, and merged into a single audio file
 - Synthesized audio is served as raw binary (`GET /api/history/{record_id}/audio`)
 - Frontend can play generated audio and download it
@@ -31,13 +31,14 @@ Open: <http://localhost:8080>
 ## CLI options
 
 ```bash
-python app.py --host 0.0.0.0 --port 9000 --voicevox-engine-url http://127.0.0.1:50021
+python app.py --host 0.0.0.0 --port 9000 --voicevox-engine-url http://127.0.0.1:50021 --pyaitalk-api-url http://127.0.0.1:8081
 ```
 
 - `--host`: host/interface to bind (default `0.0.0.0`)
 - `--port`: port to bind (default `8080`)
 - `--no-frontend`: do not serve `/` and `/frontend/*`; only backend endpoints are available
 - `--voicevox-engine-url`: VoiceVox engine base URL (default `http://127.0.0.1:50021`)
+- `--pyaitalk-api-url`: pyaitalk HTTP API base URL (default `http://127.0.0.1:8081`)
 
 ## API
 
@@ -66,6 +67,17 @@ python app.py --host 0.0.0.0 --port 9000 --voicevox-engine-url http://127.0.0.1:
   "engine": "voicevox",
   "text": "こんにちは",
   "voice": "3"
+}
+```
+
+#### Start synthesis (pyaitalk example)
+
+```json
+{
+  "action": "synthesize",
+  "engine": "pyaitalk",
+  "text": "こんにちは",
+  "voice": "nozomi_22"
 }
 ```
 
