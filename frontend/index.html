@@ -157,6 +157,7 @@
       };
 
       let historyPollTimer;
+      let pendingPlaybackRecordId = null;
 
       function escapeHtml(value) {
         return value
@@ -273,6 +274,18 @@
           const payload = await response.json();
           const records = Array.isArray(payload.items) ? payload.items : [];
           renderHistory(records);
+
+          if (pendingPlaybackRecordId) {
+            const pendingRecord = records.find((record) => record.id === pendingPlaybackRecordId);
+            if (pendingRecord?.status === "completed" && pendingRecord.audio_filename) {
+              playHistoryAudio(pendingPlaybackRecordId);
+              setStatus(`Synthesis completed (ID: ${pendingPlaybackRecordId}). Audio loaded to player.`);
+              pendingPlaybackRecordId = null;
+            } else if (["failed", "stopped"].includes(pendingRecord?.status || "")) {
+              setStatus(`Synthesis finished with status: ${pendingRecord.status} (ID: ${pendingPlaybackRecordId}).`, true);
+              pendingPlaybackRecordId = null;
+            }
+          }
         } catch (error) {
           historyList.innerHTML = `<li class=\"history-item\">Failed to load history: ${escapeHtml(String(error))}</li>`;
         }
@@ -376,6 +389,7 @@
 
           const payload = await response.json();
           const recordId = payload.item?.id;
+          pendingPlaybackRecordId = recordId || null;
           setStatus(`Synthesis started in background${recordId ? ` (ID: ${recordId})` : ""}.`);
           loadHistory();
         } catch (error) {
