@@ -122,6 +122,10 @@
           <option value="ja-JP-NanamiNeural">ja-JP-NanamiNeural</option>
         </select>
       </div>
+      <div class="control-group" id="voicevoxStyleGroup" hidden>
+        <label for="voicevoxStyleSelect">Style:</label>
+        <select id="voicevoxStyleSelect"></select>
+      </div>
       <div class="control-group">
         <label for="rateInput">Rate:</label>
         <input id="rateInput" type="text" value="+0%" placeholder="e.g. +15%" />
@@ -149,6 +153,8 @@
       const textInput = document.getElementById("textInput");
       const engineSelect = document.getElementById("engineSelect");
       const voiceSelect = document.getElementById("voiceSelect");
+      const voicevoxStyleGroup = document.getElementById("voicevoxStyleGroup");
+      const voicevoxStyleSelect = document.getElementById("voicevoxStyleSelect");
       const rateInput = document.getElementById("rateInput");
       const pitchInput = document.getElementById("pitchInput");
       const synthesizeBtn = document.getElementById("synthesizeBtn");
@@ -163,6 +169,7 @@
         voice: "edgeTtsWebUi.voice",
         rate: "edgeTtsWebUi.rate",
         pitch: "edgeTtsWebUi.pitch",
+        voicevoxStyle: "edgeTtsWebUi.voicevoxStyle",
       };
 
       let historyPollTimer;
@@ -175,6 +182,7 @@
         "ja-JP-NanamiNeural",
       ];
       let voicevoxSpeakers = [];
+      let voicevoxStyles = [];
 
       function fillVoiceOptions(options, selected) {
         voiceSelect.innerHTML = options
@@ -197,6 +205,8 @@
             label: speaker.name,
           }));
           fillVoiceOptions(options, localStorage.getItem(STORAGE_KEYS.voice));
+          updateVoicevoxStyleOptions();
+          voicevoxStyleGroup.hidden = false;
           rateInput.disabled = true;
           pitchInput.disabled = true;
           return;
@@ -206,8 +216,30 @@
           EDGE_TTS_VOICES.map((voice) => ({ value: voice, label: voice })),
           localStorage.getItem(STORAGE_KEYS.voice),
         );
+        voicevoxStyles = [];
+        voicevoxStyleSelect.innerHTML = "";
+        voicevoxStyleGroup.hidden = true;
         rateInput.disabled = false;
         pitchInput.disabled = false;
+      }
+
+      function updateVoicevoxStyleOptions() {
+        const selectedVoiceId = Number.parseInt(voiceSelect.value, 10);
+        const selectedSpeaker = voicevoxSpeakers.find((speaker) => speaker.speaker_id === selectedVoiceId);
+        voicevoxStyles = Array.isArray(selectedSpeaker?.styles) ? selectedSpeaker.styles : [];
+
+        voicevoxStyleSelect.innerHTML = voicevoxStyles
+          .map((style) => `<option value="${escapeHtml(String(style.id))}">${escapeHtml(String(style.name || "Unknown"))}</option>`)
+          .join("");
+
+        const savedStyleId = localStorage.getItem(STORAGE_KEYS.voicevoxStyle);
+        if (savedStyleId && voicevoxStyles.some((style) => String(style.id) === savedStyleId)) {
+          voicevoxStyleSelect.value = savedStyleId;
+        }
+
+        if (!voicevoxStyleSelect.value && voicevoxStyles.length > 0) {
+          voicevoxStyleSelect.value = String(voicevoxStyles[0].id);
+        }
       }
 
       async function loadVoicevoxSpeakers() {
@@ -409,6 +441,7 @@
         localStorage.setItem(STORAGE_KEYS.voice, voiceSelect.value);
         localStorage.setItem(STORAGE_KEYS.rate, rateInput.value);
         localStorage.setItem(STORAGE_KEYS.pitch, pitchInput.value);
+        localStorage.setItem(STORAGE_KEYS.voicevoxStyle, voicevoxStyleSelect.value);
       }
 
       function restoreInputsFromStorage() {
@@ -417,6 +450,7 @@
         const savedVoice = localStorage.getItem(STORAGE_KEYS.voice);
         const savedRate = localStorage.getItem(STORAGE_KEYS.rate);
         const savedPitch = localStorage.getItem(STORAGE_KEYS.pitch);
+        const savedVoicevoxStyle = localStorage.getItem(STORAGE_KEYS.voicevoxStyle);
 
         if (savedText !== null) {
           textInput.value = savedText;
@@ -438,6 +472,9 @@
           pitchInput.value = savedPitch;
         }
 
+        if (savedVoicevoxStyle !== null) {
+          voicevoxStyleSelect.value = savedVoicevoxStyle;
+        }
       }
 
       synthesizeBtn.addEventListener("click", async () => {
@@ -457,7 +494,10 @@
               action: "synthesize",
               text,
               engine: engineSelect.value,
-              voice: voiceSelect.value,
+              voice: engineSelect.value === "voicevox" ? voicevoxStyleSelect.value : voiceSelect.value,
+              style: engineSelect.value === "voicevox"
+                ? (voicevoxStyles.find((item) => String(item.id) === voicevoxStyleSelect.value)?.name || "")
+                : "",
               rate: rateInput.value.trim() || "+0%",
               pitch: pitchInput.value.trim() || "+0Hz",
             }),
@@ -484,7 +524,13 @@
         updateVoiceOptions();
         saveInputsToStorage();
       });
-      voiceSelect.addEventListener("change", saveInputsToStorage);
+      voiceSelect.addEventListener("change", () => {
+        if (engineSelect.value === "voicevox") {
+          updateVoicevoxStyleOptions();
+        }
+        saveInputsToStorage();
+      });
+      voicevoxStyleSelect.addEventListener("change", saveInputsToStorage);
       rateInput.addEventListener("input", saveInputsToStorage);
       pitchInput.addEventListener("input", saveInputsToStorage);
       refreshHistoryBtn.addEventListener("click", loadHistory);

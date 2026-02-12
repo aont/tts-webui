@@ -277,17 +277,24 @@ async def fetch_voicevox_speakers(voicevox_engine_url: str) -> list[dict[str, An
         styles = speaker.get("styles") or []
         if not isinstance(styles, list) or not styles:
             continue
-        first_style = styles[0]
-        if not isinstance(first_style, dict):
-            continue
-        style_id = first_style.get("id")
-        if not isinstance(style_id, int):
+
+        style_items: list[dict[str, Any]] = []
+        for style in styles:
+            if not isinstance(style, dict):
+                continue
+            style_id = style.get("id")
+            if not isinstance(style_id, int):
+                continue
+            style_items.append({"id": style_id, "name": style.get("name") or "Unknown"})
+
+        if not style_items:
             continue
 
         speaker_items.append(
             {
                 "name": speaker.get("name") or "Unknown",
-                "speaker_id": style_id,
+                "speaker_id": style_items[0]["id"],
+                "styles": style_items,
             }
         )
 
