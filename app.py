@@ -43,7 +43,12 @@ async def cors_middleware(request: web.Request, handler):
     if request.method == "OPTIONS":
         response = web.Response(status=204)
     else:
-        response = await handler(request)
+        try:
+            response = await handler(request)
+        except web.HTTPException as exc:
+            # Ensure error responses also include CORS headers so browsers can
+            # access the original failure status/body.
+            response = exc
 
     response.headers["Access-Control-Allow-Origin"] = allow_origin
     response.headers["Access-Control-Allow-Methods"] = allow_methods
