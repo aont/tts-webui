@@ -131,6 +131,34 @@
         white-space: pre-wrap;
         word-break: break-word;
       }
+      .split-preview-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        margin-top: 0.75rem;
+      }
+      .split-preview-list {
+        list-style: none;
+        margin: 0.5rem 0 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+      }
+      .split-preview-item {
+        border: 1px dashed color-mix(in srgb, currentColor 25%, transparent);
+        border-radius: 6px;
+        padding: 0.5rem;
+      }
+      .split-preview-item p {
+        margin: 0.35rem 0 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .split-preview-item code {
+        font-size: 0.8rem;
+      }
     </style>
   </head>
   <body>
@@ -148,6 +176,14 @@
         <button id="rebuildSegmentsBtn" type="button">Rebuild</button>
       </div>
       <ul id="segmentList" class="segment-list"></ul>
+      <div class="split-preview-header">
+        <strong>Split candidate preview</strong>
+        <label>
+          <input id="showFullSplitPreview" type="checkbox" />
+          Show full text
+        </label>
+      </div>
+      <ul id="splitPreviewList" class="split-preview-list"></ul>
     </section>
 
     <div class="actions controls">
@@ -214,7 +250,10 @@
       const refreshHistoryBtn = document.getElementById("refreshHistoryBtn");
       const rebuildSegmentsBtn = document.getElementById("rebuildSegmentsBtn");
       const segmentList = document.getElementById("segmentList");
+      const splitPreviewList = document.getElementById("splitPreviewList");
+      const showFullSplitPreview = document.getElementById("showFullSplitPreview");
       const MAX_SEGMENT_CHARS = 3000;
+      const SPLIT_CONTEXT_CHARS = 18;
       const SENTENCE_END_CHARS = new Set(["。", "．", ".", "!", "?", "！", "？", "\n"]);
       const TRAILING_CLOSERS = /^[\s\"'\)\]\}」』】》〉》）】”’]+$/;
 
@@ -470,6 +509,44 @@
         renderSegments();
       }
 
+      function buildSplitPreviewText(text, index, boundaries, showFullText) {
+        if (showFullText) {
+          return text;
+        }
+
+        const beforeBoundary = index === 0 ? 0 : boundaries[index - 1];
+        const afterBoundary = boundaries[index + 1] ?? text.length;
+
+        const contextStart = Math.max(0, beforeBoundary - SPLIT_CONTEXT_CHARS);
+        const contextEnd = Math.min(text.length, afterBoundary + SPLIT_CONTEXT_CHARS);
+
+        const prefix = contextStart > 0 ? "…" : "";
+        const suffix = contextEnd < text.length ? "…" : "";
+        return `${prefix}${text.slice(contextStart, contextEnd).trim()}${suffix}`;
+      }
+
+      function renderSplitPreview() {
+        const { text, boundaries } = segmentState;
+        if (!text) {
+          splitPreviewList.innerHTML = "<li class=\"split-preview-item\">No split candidates.</li>";
+          return;
+        }
+
+        if (boundaries.length <= 1) {
+          splitPreviewList.innerHTML = "<li class=\"split-preview-item\">No movable split candidates.</li>";
+          return;
+        }
+
+        const showFullText = showFullSplitPreview.checked;
+        splitPreviewList.innerHTML = boundaries
+          .slice(0, -1)
+          .map((point, index) => {
+            const preview = escapeHtml(buildSplitPreviewText(text, index, boundaries, showFullText));
+            return `<li class=\"split-preview-item\"><strong>Split ${index + 1}</strong> <code>index ${point}</code><p>${preview}</p></li>`;
+          })
+          .join("");
+      }
+
       function renderSegments() {
         const segments = getCurrentSegments();
         if (!segments.length) {
@@ -493,6 +570,8 @@
             moveBoundary(index, direction);
           });
         });
+
+        renderSplitPreview();
       }
 
       function rebuildSegmentsFromInput() {
@@ -819,6 +898,7 @@
       pitchInput.addEventListener("input", saveInputsToStorage);
       refreshHistoryBtn.addEventListener("click", loadHistory);
       rebuildSegmentsBtn.addEventListener("click", rebuildSegmentsFromInput);
+      showFullSplitPreview.addEventListener("change", renderSplitPreview);
 
       (async () => {
         debugLog("Initializing frontend state");
