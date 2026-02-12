@@ -298,25 +298,34 @@ async def synthesize_speech_pyaitalk(
     )
 
     async with ClientSession() as session:
-        for index, text_segment in enumerate(segments, start=1):
-            if stop_event.is_set():
-                raise SynthesisStoppedError("Synthesis stopped by user")
-
-            if voice:
-                async with session.post(
-                    f"{pyaitalk_api_url}/voice/load",
-                    json={"voice": voice},
-                ) as voice_response:
-                    logger.debug(
-                        "pyaitalk voice/load request sent (segment=%d, status=%d)",
-                        index,
-                        voice_response.status,
-                    )
-                    if voice_response.status >= 400:
-                        error_body = await voice_response.text()
+        if voice:
+            async with session.post(
+                f"{pyaitalk_api_url}/voice/load",
+                json={"voice": voice},
+            ) as voice_response:
+                logger.debug(
+                    "pyaitalk voice/load request sent (status=%d)",
+                    voice_response.status,
+                )
+                if voice_response.status >= 400:
+                    error_body = await voice_response.text()
+                    if (
+                        voice_response.status == 400
+                        and "ALREADY_LOADED" in error_body
+                    ):
+                        logger.debug(
+                            "pyaitalk voice already loaded (voice=%s): %s",
+                            voice,
+                            error_body,
+                        )
+                    else:
                         raise RuntimeError(
                             f"pyaitalk voice/load failed ({voice_response.status}): {error_body}"
                         )
+
+        for index, text_segment in enumerate(segments, start=1):
+            if stop_event.is_set():
+                raise SynthesisStoppedError("Synthesis stopped by user")
 
             async with session.post(
                 f"{pyaitalk_api_url}/synthesize",
