@@ -1,8 +1,9 @@
-# Edge TTS Web UI (HTTP API)
+# TTS Web UI (HTTP API)
 
-A minimal demo app using:
+A minimal demo app for text-to-speech (TTS) workflows using:
 
-- **Backend**: Python, `aiohttp`, `edge-tts`
+- **Backend**: Python, `aiohttp`
+- **TTS engines**: pluggable engines (currently `edge-tts` and `voicevox`)
 - **Frontend**: plain HTML/JS
 - **API transport**: HTTP (`GET`/`POST`)
 
@@ -10,10 +11,10 @@ A minimal demo app using:
 
 - Enter text in the browser
 - Send synthesis/stop/history commands to a **single endpoint** (`POST /api/command`)
-- Backend generates speech with `edge-tts`
-- Long input is automatically split into manageable chunks, synthesized per chunk, and concatenated into a single MP3
-- Synthesized audio is served as raw binary MP3 (`GET /api/history/{record_id}/audio`)
-- Frontend can play the MP3 and download it
+- Select a TTS engine per request (`edge-tts` / `voicevox`)
+- Long input is automatically split into manageable chunks, synthesized per chunk, and merged into a single audio file
+- Synthesized audio is served as raw binary (`GET /api/history/{record_id}/audio`)
+- Frontend can play generated audio and download it
 - Backend host/port and frontend serving can be controlled via command-line flags
 
 ## Run locally
@@ -44,15 +45,35 @@ python app.py --host 0.0.0.0 --port 9000 --voicevox-engine-url http://127.0.0.1:
 
 `POST /api/command`
 
-#### Start synthesis
+#### Start synthesis (edge-tts example)
 
 ```json
 {
   "action": "synthesize",
-  "text": "Hello from Edge TTS",
+  "engine": "edge-tts",
+  "text": "Hello from TTS Web UI",
   "voice": "en-US-JennyNeural",
   "rate": "+0%",
   "pitch": "+0Hz"
+}
+```
+
+#### Start synthesis (voicevox example)
+
+```json
+{
+  "action": "synthesize",
+  "engine": "voicevox",
+  "text": "こんにちは",
+  "voice": "3"
+}
+```
+
+#### List VoiceVox speakers
+
+```json
+{
+  "action": "voicevox_speakers"
 }
 ```
 
@@ -77,4 +98,4 @@ python app.py --host 0.0.0.0 --port 9000 --voicevox-engine-url http://127.0.0.1:
 
 `GET /api/history/{record_id}/audio`
 
-- Returns `audio/mpeg` as raw binary (not base64 JSON payload).
+- Returns generated audio as raw binary (content type depends on engine and output format).
