@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from aiohttp import WSMsgType, web
+from aiohttp import web
 import edge_tts
 
 
@@ -263,80 +263,12 @@ class SynthesisManager:
         return task is not None and not task.done()
 
 
-async def ws_handler(request: web.Request) -> web.WebSocketResponse:
-    ws = web.WebSocketResponse(heartbeat=30)
-    await ws.prepare(request)
-
-    await ws.send_json(
-        {
-            "type": "ready",
-            "message": "Connected. Use /api/synthesis for resilient background synthesis.",
-        }
-    )
-
-    manager: SynthesisManager = request.app["synthesis_manager"]
-
-    async for msg in ws:
-        if msg.type != WSMsgType.TEXT:
-            if msg.type == WSMsgType.ERROR:
-                print(f"WebSocket closed with exception: {ws.exception()}")
-            continue
-
-        try:
-            payload = json.loads(msg.data)
-        except json.JSONDecodeError:
-            await ws.send_json({"type": "error", "message": "Invalid JSON payload"})
-            continue
-
-        action = payload.get("action")
-        if action == "synthesize":
-            text = (payload.get("text") or "").strip()
-            voice = payload.get("voice") or "en-US-JennyNeural"
-            rate = payload.get("rate") or "+0%"
-            pitch = payload.get("pitch") or "+0Hz"
-
-            if not text:
-                await ws.send_json({"type": "error", "message": "Text is required"})
-                continue
-
-            record = await manager.start(text=text, voice=voice, rate=rate, pitch=pitch)
-            await ws.send_json(
-                {
-                    "type": "status",
-                    "message": "Synthesis started in background",
-                    "record_id": record["id"],
-                }
-            )
-            continue
-
-        if action == "stop":
-            record_id = (payload.get("record_id") or "").strip()
-            if not record_id:
-                await ws.send_json({"type": "error", "message": "record_id is required"})
-                continue
-            did_stop = await manager.stop(record_id)
-            if not did_stop:
-                await ws.send_json({"type": "error", "message": "No running synthesis for record_id"})
-                continue
-            await ws.send_json({"type": "status", "message": "Stop requested", "record_id": record_id})
-            continue
-
-        await ws.send_json({"type": "error", "message": "Unsupported action"})
-
-    return ws
-
-
 async def index_handler(_: web.Request) -> web.FileResponse:
     return web.FileResponse(FRONTEND_DIR / "index.html")
 
 
 async def health_handler(_: web.Request) -> web.Response:
     return web.json_response({"status": "ok"})
-
-
-async def history_handler(_: web.Request) -> web.Response:
-    records = load_history_records()
-    return web.json_response({"items": records})
 
 
 async def history_audio_handler(request: web.Request) -> web.StreamResponse:
@@ -356,7 +288,7 @@ async def history_audio_handler(request: web.Request) -> web.StreamResponse:
     return web.FileResponse(audio_path, headers={"Content-Type": "audio/mpeg"})
 
 
-async def synthesize_handler(request: web.Request) -> web.Response:
+async def api_command_handler(request: web.Request) -> web.Response:
     manager: SynthesisManager = request.app["synthesis_manager"]
 
     try:
@@ -364,30 +296,36 @@ async def synthesize_handler(request: web.Request) -> web.Response:
     except json.JSONDecodeError:
         raise web.HTTPBadRequest(reason="Invalid JSON payload")
 
-    text = (payload.get("text") or "").strip()
-    voice = payload.get("voice") or "en-US-JennyNeural"
-    rate = payload.get("rate") or "+0%"
-    pitch = payload.get("pitch") or "+0Hz"
+    action = (payload.get("action") or "").strip()
+    if not action:
+        raise web.HTTPBadRequest(reason="action is required")
 
-    if not text:
-        raise web.HTTPBadRequest(reason="Text is required")
+    if action == "synthesize":
+        text = (payload.get("text") or "").strip()
+        voice = payload.get("voice") or "en-US-JennyNeural"
+        rate = payload.get("rate") or "+0%"
+        pitch = payload.get("pitch") or "+0Hz"
 
-    record = await manager.start(text=text, voice=voice, rate=rate, pitch=pitch)
-    return web.json_response({"item": record}, status=202)
+        if not text:
+            raise web.HTTPBadRequest(reason="Text is required")
 
+        record = await manager.start(text=text, voice=voice, rate=rate, pitch=pitch)
+        return web.json_response({"item": record}, status=202)
 
-async def stop_history_handler(request: web.Request) -> web.Response:
-    manager: SynthesisManager = request.app["synthesis_manager"]
-    record_id = request.match_info.get("record_id", "")
+    if action == "stop":
+        record_id = (payload.get("record_id") or "").strip()
+        if not record_id:
+            raise web.HTTPBadRequest(reason="record_id is required")
 
-    if not record_id:
-        raise web.HTTPBadRequest(reason="record_id is required")
+        did_stop = await manager.stop(record_id)
+        if not did_stop:
+            raise web.HTTPNotFound(reason="No running synthesis with this record_id")
+        return web.json_response({"ok": True, "record_id": record_id})
 
-    did_stop = await manager.stop(record_id)
-    if not did_stop:
-        raise web.HTTPNotFound(reason="No running synthesis with this record_id")
+    if action == "history_list":
+        return web.json_response({"items": load_history_records()})
 
-    return web.json_response({"ok": True, "record_id": record_id})
+    raise web.HTTPBadRequest(reason="Unsupported action")
 
 
 def create_app(serve_frontend: bool = True) -> web.Application:
@@ -399,16 +337,13 @@ def create_app(serve_frontend: bool = True) -> web.Application:
         app.router.add_static("/frontend", FRONTEND_DIR)
 
     app.router.add_get("/health", health_handler)
-    app.router.add_get("/api/history", history_handler)
+    app.router.add_post("/api/command", api_command_handler)
     app.router.add_get("/api/history/{record_id}/audio", history_audio_handler)
-    app.router.add_post("/api/synthesis", synthesize_handler)
-    app.router.add_post("/api/history/{record_id}/stop", stop_history_handler)
-    app.router.add_get("/ws", ws_handler)
     return app
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Edge TTS WebSocket server")
+    parser = argparse.ArgumentParser(description="Edge TTS HTTP server")
     parser.add_argument(
         "--host",
         default="0.0.0.0",

@@ -1,18 +1,19 @@
-# Edge TTS Web UI (WebSocket)
+# Edge TTS Web UI (HTTP API)
 
 A minimal demo app using:
 
 - **Backend**: Python, `aiohttp`, `edge-tts`
 - **Frontend**: plain HTML/JS
-- **Realtime channel**: **WebSocket only** via `/ws`
+- **API transport**: HTTP (`GET`/`POST`)
 
 ## Features
 
 - Enter text in the browser
-- Send synthesis requests to backend over WebSocket
+- Send synthesis/stop/history commands to a **single endpoint** (`POST /api/command`)
 - Backend generates speech with `edge-tts`
 - Long input is automatically split into manageable chunks, synthesized per chunk, and concatenated into a single MP3
-- Frontend can play the returned audio and download it as an MP3
+- Synthesized audio is served as raw binary MP3 (`GET /api/history/{record_id}/audio`)
+- Frontend can play the MP3 and download it
 - Backend host/port and frontend serving can be controlled via command-line flags
 
 ## Run locally
@@ -34,29 +35,45 @@ python app.py --host 0.0.0.0 --port 9000
 
 - `--host`: host/interface to bind (default `0.0.0.0`)
 - `--port`: port to bind (default `8080`)
-- `--no-frontend`: do not serve `/` and `/frontend/*`; only backend endpoints (`/ws`, `/health`) are available
+- `--no-frontend`: do not serve `/` and `/frontend/*`; only backend endpoints are available
 
-If you serve the frontend from another server, set **Backend WS URL** in the UI to point to this backend (for example `ws://localhost:9000/ws`).
+## API
 
-## WebSocket message format
+### Unified command endpoint
 
-### Request
+`POST /api/command`
+
+#### Start synthesis
 
 ```json
 {
   "action": "synthesize",
   "text": "Hello from Edge TTS",
-  "voice": "en-US-JennyNeural"
+  "voice": "en-US-JennyNeural",
+  "rate": "+0%",
+  "pitch": "+0Hz"
 }
 ```
 
-### Audio response
+#### Stop synthesis
 
 ```json
 {
-  "type": "audio",
-  "format": "audio/mpeg",
-  "filename": "speech.mp3",
-  "audio_base64": "..."
+  "action": "stop",
+  "record_id": "<record_id>"
 }
 ```
+
+#### List history
+
+```json
+{
+  "action": "history_list"
+}
+```
+
+### Binary audio endpoint
+
+`GET /api/history/{record_id}/audio`
+
+- Returns `audio/mpeg` as raw binary (not base64 JSON payload).

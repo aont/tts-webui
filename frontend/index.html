@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Edge TTS WebSocket Demo</title>
+    <title>Edge TTS HTTP Demo</title>
     <style>
       :root {
         color-scheme: light dark;
@@ -97,10 +97,10 @@
     </style>
   </head>
   <body>
-    <h1>Edge TTS WebSocket Demo</h1>
+    <h1>Edge TTS HTTP Demo</h1>
     <p>
       Enter text and synthesize speech using <code>edge-tts</code>. Communication between frontend and backend happens via
-      WebSocket.
+      HTTP (GET/POST).
     </p>
 
     <textarea id="textInput" placeholder="Type text to synthesize..."></textarea>
@@ -123,11 +123,6 @@
         <label for="pitchInput">Pitch:</label>
         <input id="pitchInput" type="text" value="+0Hz" placeholder="e.g. +5Hz" />
       </div>
-      <div class="control-group">
-        <label for="wsUrlInput">Backend WS URL:</label>
-        <input id="wsUrlInput" type="text" placeholder="wss://example.com/ws" style="width: 18rem" />
-      </div>
-      <button id="connectBtn" type="button">Connect</button>
       <button id="synthesizeBtn" type="button">Synthesize</button>
       <a id="downloadLink" href="#" download="speech.mp3" style="display: none">Download audio</a>
     </div>
@@ -148,8 +143,6 @@
       const voiceSelect = document.getElementById("voiceSelect");
       const rateInput = document.getElementById("rateInput");
       const pitchInput = document.getElementById("pitchInput");
-      const wsUrlInput = document.getElementById("wsUrlInput");
-      const connectBtn = document.getElementById("connectBtn");
       const synthesizeBtn = document.getElementById("synthesizeBtn");
       const audioPlayer = document.getElementById("audioPlayer");
       const downloadLink = document.getElementById("downloadLink");
@@ -161,11 +154,8 @@
         voice: "edgeTtsWebUi.voice",
         rate: "edgeTtsWebUi.rate",
         pitch: "edgeTtsWebUi.pitch",
-        wsUrl: "edgeTtsWebUi.wsUrl",
       };
 
-      let socket;
-      let currentObjectUrl;
       let historyPollTimer;
 
       function escapeHtml(value) {
@@ -248,8 +238,13 @@
             if (!recordId) return;
 
             try {
-              const response = await fetch(`/api/history/${encodeURIComponent(recordId)}/stop`, {
+              const response = await fetch(`/api/command`, {
                 method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  action: "stop",
+                  record_id: recordId,
+                }),
               });
               if (!response.ok) {
                 throw new Error(`Stop request failed: ${response.status}`);
@@ -266,7 +261,11 @@
 
       async function loadHistory() {
         try {
-          const response = await fetch("/api/history");
+          const response = await fetch("/api/command", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "history_list" }),
+          });
           if (!response.ok) {
             throw new Error(`History request failed: ${response.status}`);
           }
@@ -323,7 +322,6 @@
         localStorage.setItem(STORAGE_KEYS.voice, voiceSelect.value);
         localStorage.setItem(STORAGE_KEYS.rate, rateInput.value);
         localStorage.setItem(STORAGE_KEYS.pitch, pitchInput.value);
-        localStorage.setItem(STORAGE_KEYS.wsUrl, wsUrlInput.value);
       }
 
       function restoreInputsFromStorage() {
@@ -331,7 +329,6 @@
         const savedVoice = localStorage.getItem(STORAGE_KEYS.voice);
         const savedRate = localStorage.getItem(STORAGE_KEYS.rate);
         const savedPitch = localStorage.getItem(STORAGE_KEYS.pitch);
-        const savedWsUrl = localStorage.getItem(STORAGE_KEYS.wsUrl);
 
         if (savedText !== null) {
           textInput.value = savedText;
@@ -349,61 +346,7 @@
           pitchInput.value = savedPitch;
         }
 
-        if (savedWsUrl !== null) {
-          wsUrlInput.value = savedWsUrl;
-        }
       }
-
-      function getDefaultWsUrl() {
-        const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-        return `${protocol}://${window.location.host}/ws`;
-      }
-
-      function getConfiguredWsUrl() {
-        return wsUrlInput.value.trim() || getDefaultWsUrl();
-      }
-
-      function connectWebSocket() {
-        const wsUrl = getConfiguredWsUrl();
-        if (socket && socket.readyState === WebSocket.OPEN) {
-          socket.close();
-        }
-
-        setStatus(`Connecting to ${wsUrl}...`);
-        socket = new WebSocket(wsUrl);
-
-        socket.addEventListener("open", () => {
-          setStatus("WebSocket connected.");
-        });
-
-        socket.addEventListener("close", () => {
-          setStatus("WebSocket disconnected. Background synthesis continues via HTTP API.", true);
-        });
-
-        socket.addEventListener("message", (event) => {
-          const payload = JSON.parse(event.data);
-
-          if (payload.type === "ready" || payload.type === "status") {
-            setStatus(payload.message);
-            return;
-          }
-
-          if (payload.type === "error") {
-            setStatus(payload.message, true);
-            return;
-          }
-
-          if (payload.type === "audio") {
-            setStatus("Received audio payload over WebSocket (legacy mode).");
-            loadHistory();
-          }
-        });
-      }
-
-      connectBtn.addEventListener("click", () => {
-        saveInputsToStorage();
-        connectWebSocket();
-      });
 
       synthesizeBtn.addEventListener("click", async () => {
         const text = normalizeInputText(textInput.value);
@@ -415,10 +358,11 @@
         setStatus("Starting background synthesis...");
 
         try {
-          const response = await fetch("/api/synthesis", {
+          const response = await fetch("/api/command", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
+              action: "synthesize",
               text,
               voice: voiceSelect.value,
               rate: rateInput.value.trim() || "+0%",
@@ -445,12 +389,9 @@
       voiceSelect.addEventListener("change", saveInputsToStorage);
       rateInput.addEventListener("input", saveInputsToStorage);
       pitchInput.addEventListener("input", saveInputsToStorage);
-      wsUrlInput.addEventListener("input", saveInputsToStorage);
       refreshHistoryBtn.addEventListener("click", loadHistory);
 
-      wsUrlInput.value = getDefaultWsUrl();
       restoreInputsFromStorage();
-      connectWebSocket();
       loadHistory();
 
       historyPollTimer = setInterval(loadHistory, 4000);
