@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import math
 from datetime import datetime, timezone
 import io
 import json
@@ -7,6 +8,7 @@ import logging
 from pathlib import Path
 import subprocess
 import tempfile
+import re
 from typing import Any
 from uuid import uuid4
 import wave
@@ -28,6 +30,9 @@ DEFAULT_LOG_LEVEL = "DEBUG"
 
 
 logger = logging.getLogger(__name__)
+
+SENTENCE_END_CHARS = {"。", "．", ".", "!", "?", "！", "？", "\n"}
+TRAILING_CLOSERS = re.compile(r"[\s\"'\)\]\}」』】》〉》）】”’]")
 
 
 class SynthesisStoppedError(Exception):
@@ -107,46 +112,70 @@ def get_history_record(record_id: str) -> dict[str, Any] | None:
 
 
 def split_text_segments(text: str, max_chars: int = MAX_SEGMENT_CHARS) -> list[str]:
-    """Split text into chunks that respect maximum length while preferring word boundaries."""
+    """Split text using sentence-end candidates near evenly spaced targets."""
     stripped_text = text.strip()
     if not stripped_text:
         return []
 
-    words = stripped_text.split()
-    segments: list[str] = []
-    current_segment: list[str] = []
-    current_length = 0
-
-    for word in words:
-        if len(word) > max_chars:
-            if current_segment:
-                segments.append(" ".join(current_segment))
-                current_segment = []
-                current_length = 0
-
-            for i in range(0, len(word), max_chars):
-                segments.append(word[i : i + max_chars])
+    candidates: list[int] = []
+    for i, char in enumerate(stripped_text):
+        if char not in SENTENCE_END_CHARS:
             continue
 
-        separator_length = 1 if current_segment else 0
-        projected_length = current_length + separator_length + len(word)
+        end = i + 1
+        while end < len(stripped_text) and TRAILING_CLOSERS.fullmatch(stripped_text[end]):
+            end += 1
+        if end > 0 and end not in candidates:
+            candidates.append(end)
 
-        if projected_length <= max_chars:
-            current_segment.append(word)
-            current_length = projected_length
-        else:
-            segments.append(" ".join(current_segment))
-            current_segment = [word]
-            current_length = len(word)
+    if len(stripped_text) not in candidates:
+        candidates.append(len(stripped_text))
+    candidates.sort()
 
-    if current_segment:
-        segments.append(" ".join(current_segment))
+    segment_count = max(1, math.ceil(len(stripped_text) / max_chars))
+    target_segment_length = len(stripped_text) / segment_count
+
+    boundaries: list[int] = []
+    previous = 0
+
+    for split_index in range(1, segment_count):
+        target = target_segment_length * split_index
+        max_end = min(previous + max_chars, len(stripped_text))
+
+        selected = next(
+            (
+                point
+                for point in candidates
+                if previous < point <= max_end and point > target
+            ),
+            None,
+        )
+
+        if selected is None:
+            selected = next(
+                (point for point in candidates if previous < point <= max_end),
+                max_end,
+            )
+
+        boundaries.append(selected)
+        previous = selected
+
+    boundaries.append(len(stripped_text))
+
+    segments: list[str] = []
+    start = 0
+    for end in boundaries:
+        segment = stripped_text[start:end].strip()
+        if segment:
+            segments.append(segment)
+        start = end
 
     logger.debug(
-        "Split input text into %d segment(s) (max_chars=%d, input_len=%d)",
+        "Split input text into %d segment(s) (max_chars=%d, input_len=%d, target_len=%.2f)",
         len(segments),
         max_chars,
         len(stripped_text),
+        target_segment_length,
     )
     return segments
 

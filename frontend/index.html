@@ -439,28 +439,25 @@
         }
 
         const candidates = collectSentenceCandidates(text);
+        const splitCount = Math.max(1, Math.ceil(text.length / maxChars));
+        const targetSegmentLength = text.length / splitCount;
         const boundaries = [];
-        let start = 0;
+        let previous = 0;
 
-        while (start < text.length) {
-          const maxEnd = Math.min(start + maxChars, text.length);
-          let selected = -1;
+        for (let splitIndex = 1; splitIndex < splitCount; splitIndex += 1) {
+          const target = targetSegmentLength * splitIndex;
+          const maxEnd = Math.min(previous + maxChars, text.length);
+          let selected = candidates.find((point) => point > previous && point <= maxEnd && point > target);
 
-          for (const point of candidates) {
-            if (point <= start || point > maxEnd) {
-              continue;
-            }
-            selected = point;
-          }
-
-          if (selected === -1) {
-            selected = maxEnd;
+          if (!selected) {
+            selected = candidates.find((point) => point > previous && point <= maxEnd) || maxEnd;
           }
 
           boundaries.push(selected);
-          start = selected;
+          previous = selected;
         }
 
+        boundaries.push(text.length);
         return { boundaries, candidates };
       }
 
