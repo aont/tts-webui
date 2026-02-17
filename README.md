@@ -10,10 +10,10 @@ A minimal demo app for text-to-speech (TTS) workflows using:
 ## Features
 
 - Enter text in the browser
-- Send synthesis/stop/history commands to a **single endpoint** (`POST /api/command`)
+- Use dedicated endpoints for synthesize/stop/history/speaker-list operations
 - Select a TTS engine per request (`edge-tts` / `voicevox` / `pyaitalk`)
 - Long input is automatically split into manageable chunks, synthesized per chunk, and merged into a single audio file
-- Synthesized audio is served as raw binary (`GET /api/history/{record_id}/audio`)
+- Synthesized audio is served as raw binary (`GET /history/{record_id}/audio`)
 - Frontend can play generated audio and download it
 - Backend host/port and frontend serving can be controlled via command-line flags
 
@@ -42,15 +42,12 @@ python app.py --host 0.0.0.0 --port 9000 --voicevox-engine-url http://127.0.0.1:
 
 ## API
 
-### Unified command endpoint
+### Start synthesis
 
-`POST /api/command`
-
-#### Start synthesis (edge-tts example)
+`POST /synthesize`
 
 ```json
 {
-  "action": "synthesize",
   "engine": "edge-tts",
   "text": "Hello from TTS Web UI",
   "voice": "en-US-JennyNeural",
@@ -59,63 +56,30 @@ python app.py --host 0.0.0.0 --port 9000 --voicevox-engine-url http://127.0.0.1:
 }
 ```
 
-#### Start synthesis (voicevox example)
+### VoiceVox speakers
+
+`GET /voicevox/speakers`
+
+### pyaitalk voices
+
+`GET /pyaitalk/voices`
+
+### Stop synthesis
+
+`POST /stop`
 
 ```json
 {
-  "action": "synthesize",
-  "engine": "voicevox",
-  "text": "こんにちは",
-  "voice": "3"
-}
-```
-
-#### Start synthesis (pyaitalk example)
-
-```json
-{
-  "action": "synthesize",
-  "engine": "pyaitalk",
-  "text": "こんにちは",
-  "voice": "Yukari"
-}
-```
-
-#### List VoiceVox speakers
-
-```json
-{
-  "action": "voicevox_speakers"
-}
-```
-
-#### List pyaitalk voices
-
-```json
-{
-  "action": "pyaitalk_voices"
-}
-```
-
-#### Stop synthesis
-
-```json
-{
-  "action": "stop",
   "record_id": "<record_id>"
 }
 ```
 
-#### List history
+### List history
 
-```json
-{
-  "action": "history_list"
-}
-```
+`GET /history`
 
 ### Binary audio endpoint
 
-`GET /api/history/{record_id}/audio`
+`GET /history/{record_id}/audio`
 
 - Returns generated audio as raw binary (content type depends on engine and output format).

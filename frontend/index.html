@@ -270,15 +270,18 @@
         }
 
         try {
-          return new URL(value).origin;
+          const url = new URL(value);
+          const normalizedPath = url.pathname.replace(/\/+$/, "");
+          return `${url.origin}${normalizedPath}`;
         } catch {
-          throw new Error("Invalid endpoint URL. Include protocol, e.g. http://127.0.0.1:8080");
+          throw new Error("Invalid endpoint URL. Include protocol, e.g. http://127.0.0.1:8080/base");
         }
       }
 
       function getApiUrl(path) {
-        const endpoint = normalizeEndpointUrl(endpointInput.value);
-        return `${endpoint}${path}`;
+        const endpoint = normalizeEndpointUrl(endpointInput.value).replace(/\/+$/, "");
+        const normalizedPath = String(path || "").replace(/^\/+/, "");
+        return `${endpoint}/${normalizedPath}`;
       }
 
       function fillVoiceOptions(options, selected) {
@@ -358,11 +361,7 @@
       async function loadVoicevoxSpeakers() {
         debugLog("Loading VoiceVox speakers");
         try {
-          const response = await fetch(getApiUrl("/api/command"), {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action: "voicevox_speakers" }),
-          });
+          const response = await fetch(getApiUrl("voicevox/speakers"));
 
           if (!response.ok) {
             throw new Error(`VoiceVox speakers request failed: ${response.status}`);
@@ -382,11 +381,7 @@
       async function loadPyaitalkVoices() {
         debugLog("Loading pyaitalk voices");
         try {
-          const response = await fetch(getApiUrl("/api/command"), {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action: "pyaitalk_voices" }),
-          });
+          const response = await fetch(getApiUrl("pyaitalk/voices"));
 
           if (!response.ok) {
             throw new Error(`pyaitalk voices request failed: ${response.status}`);
@@ -553,7 +548,7 @@
 
       function playHistoryAudio(recordId, audioFilename = "") {
         debugLog("Playing history audio", { recordId, audioFilename });
-        const audioUrl = getApiUrl(`/api/history/${encodeURIComponent(recordId)}/audio`);
+        const audioUrl = getApiUrl(`history/${encodeURIComponent(recordId)}/audio`);
         audioPlayer.src = audioUrl;
         audioPlayer.play().catch(() => {
           // autoplay might be blocked by browser policy
@@ -623,11 +618,10 @@
             if (!recordId) return;
 
             try {
-              const response = await fetch(getApiUrl("/api/command"), {
+              const response = await fetch(getApiUrl("stop"), {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                  action: "stop",
                   record_id: recordId,
                 }),
               });
@@ -676,11 +670,7 @@
       async function loadHistory() {
         debugLog("Loading history");
         try {
-          const response = await fetch(getApiUrl("/api/command"), {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action: "history_list" }),
-          });
+          const response = await fetch(getApiUrl("history"));
           if (!response.ok) {
             throw new Error(`History request failed: ${response.status}`);
           }
@@ -807,11 +797,10 @@
         setStatus("Starting background synthesis...");
 
         try {
-          const response = await fetch(getApiUrl("/api/command"), {
+          const response = await fetch(getApiUrl("synthesize"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              action: "synthesize",
               text,
               segments: getCurrentSegments(),
               engine: engineSelect.value,

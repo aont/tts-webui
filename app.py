@@ -696,71 +696,77 @@ async def history_audio_handler(request: web.Request) -> web.StreamResponse:
     return web.FileResponse(audio_path, headers={"Content-Type": content_type})
 
 
-async def api_command_handler(request: web.Request) -> web.Response:
-    manager: SynthesisManager = request.app["synthesis_manager"]
-    voicevox_engine_url = request.app["voicevox_engine_url"]
-    pyaitalk_api_url = request.app["pyaitalk_api_url"]
-
+async def parse_json_payload(request: web.Request) -> dict[str, Any]:
     try:
         payload = await request.json()
     except json.JSONDecodeError:
         raise web.HTTPBadRequest(reason="Invalid JSON payload")
 
-    action = (payload.get("action") or "").strip()
-    logger.debug("Received /api/command action=%s payload_keys=%s", action, sorted(payload.keys()))
-    if not action:
-        raise web.HTTPBadRequest(reason="action is required")
+    if not isinstance(payload, dict):
+        raise web.HTTPBadRequest(reason="JSON object payload is required")
+    return payload
 
-    if action == "synthesize":
-        text = (payload.get("text") or "").strip()
-        segments = normalize_segments_payload(payload.get("segments"), text)
-        engine = (payload.get("engine") or DEFAULT_ENGINE).strip()
-        voice = payload.get("voice") or "en-US-JennyNeural"
-        rate = payload.get("rate") or "+0%"
-        pitch = payload.get("pitch") or "+0Hz"
 
-        if not text:
-            raise web.HTTPBadRequest(reason="Text is required")
+async def synthesize_handler(request: web.Request) -> web.Response:
+    manager: SynthesisManager = request.app["synthesis_manager"]
+    payload = await parse_json_payload(request)
+    logger.debug("Received /synthesize payload_keys=%s", sorted(payload.keys()))
 
-        if engine not in {"edge-tts", "voicevox", "pyaitalk"}:
-            raise web.HTTPBadRequest(reason="Unsupported engine")
+    text = (payload.get("text") or "").strip()
+    segments = normalize_segments_payload(payload.get("segments"), text)
+    engine = (payload.get("engine") or DEFAULT_ENGINE).strip()
+    voice = payload.get("voice") or "en-US-JennyNeural"
+    rate = payload.get("rate") or "+0%"
+    pitch = payload.get("pitch") or "+0Hz"
 
-        if engine == "voicevox" and not str(voice).strip():
-            raise web.HTTPBadRequest(reason="voice is required for voicevox")
+    if not text:
+        raise web.HTTPBadRequest(reason="Text is required")
 
-        if engine == "pyaitalk" and not str(voice).strip():
-            raise web.HTTPBadRequest(reason="voice is required for pyaitalk")
+    if engine not in {"edge-tts", "voicevox", "pyaitalk"}:
+        raise web.HTTPBadRequest(reason="Unsupported engine")
 
-        record = await manager.start(
-            text=text,
-            segments=segments,
-            voice=str(voice),
-            rate=rate,
-            pitch=pitch,
-            engine=engine,
-        )
-        return web.json_response({"item": record}, status=202)
+    if engine == "voicevox" and not str(voice).strip():
+        raise web.HTTPBadRequest(reason="voice is required for voicevox")
 
-    if action == "voicevox_speakers":
-        return web.json_response({"items": await fetch_voicevox_speakers(voicevox_engine_url)})
+    if engine == "pyaitalk" and not str(voice).strip():
+        raise web.HTTPBadRequest(reason="voice is required for pyaitalk")
 
-    if action == "pyaitalk_voices":
-        return web.json_response({"items": await fetch_pyaitalk_voices(pyaitalk_api_url)})
+    record = await manager.start(
+        text=text,
+        segments=segments,
+        voice=str(voice),
+        rate=rate,
+        pitch=pitch,
+        engine=engine,
+    )
+    return web.json_response({"item": record}, status=202)
 
-    if action == "stop":
-        record_id = (payload.get("record_id") or "").strip()
-        if not record_id:
-            raise web.HTTPBadRequest(reason="record_id is required")
 
-        did_stop = await manager.stop(record_id)
-        if not did_stop:
-            raise web.HTTPNotFound(reason="No running synthesis with this record_id")
-        return web.json_response({"ok": True, "record_id": record_id})
+async def voicevox_speakers_handler(request: web.Request) -> web.Response:
+    voicevox_engine_url = request.app["voicevox_engine_url"]
+    return web.json_response({"items": await fetch_voicevox_speakers(voicevox_engine_url)})
 
-    if action == "history_list":
-        return web.json_response({"items": load_history_records()})
 
-    raise web.HTTPBadRequest(reason="Unsupported action")
+async def pyaitalk_voices_handler(request: web.Request) -> web.Response:
+    pyaitalk_api_url = request.app["pyaitalk_api_url"]
+    return web.json_response({"items": await fetch_pyaitalk_voices(pyaitalk_api_url)})
+
+
+async def stop_handler(request: web.Request) -> web.Response:
+    manager: SynthesisManager = request.app["synthesis_manager"]
+    payload = await parse_json_payload(request)
+    record_id = (payload.get("record_id") or "").strip()
+    if not record_id:
+        raise web.HTTPBadRequest(reason="record_id is required")
+
+    did_stop = await manager.stop(record_id)
+    if not did_stop:
+        raise web.HTTPNotFound(reason="No running synthesis with this record_id")
+    return web.json_response({"ok": True, "record_id": record_id})
+
+
+async def history_list_handler(_: web.Request) -> web.Response:
+    return web.json_response({"items": load_history_records()})
 
 
 def create_app(
@@ -790,10 +796,18 @@ def create_app(
         app.router.add_static("/frontend", FRONTEND_DIR)
 
     app.router.add_get("/health", health_handler)
-    app.router.add_post("/api/command", api_command_handler)
-    app.router.add_route("OPTIONS", "/api/command", api_command_handler)
-    app.router.add_get("/api/history/{record_id}/audio", history_audio_handler)
-    app.router.add_route("OPTIONS", "/api/history/{record_id}/audio", history_audio_handler)
+    app.router.add_post("/synthesize", synthesize_handler)
+    app.router.add_route("OPTIONS", "/synthesize", synthesize_handler)
+    app.router.add_get("/voicevox/speakers", voicevox_speakers_handler)
+    app.router.add_route("OPTIONS", "/voicevox/speakers", voicevox_speakers_handler)
+    app.router.add_get("/pyaitalk/voices", pyaitalk_voices_handler)
+    app.router.add_route("OPTIONS", "/pyaitalk/voices", pyaitalk_voices_handler)
+    app.router.add_post("/stop", stop_handler)
+    app.router.add_route("OPTIONS", "/stop", stop_handler)
+    app.router.add_get("/history", history_list_handler)
+    app.router.add_route("OPTIONS", "/history", history_list_handler)
+    app.router.add_get("/history/{record_id}/audio", history_audio_handler)
+    app.router.add_route("OPTIONS", "/history/{record_id}/audio", history_audio_handler)
     return app
 
 
